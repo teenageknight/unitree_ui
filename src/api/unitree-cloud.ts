@@ -409,7 +409,7 @@ export class UnitreeCloudAPI {
 
   // ─── HTTP helpers ────────────────────────────────────────────────
 
-  private async request<T>(method: string, path: string, params?: Record<string, string>, platform: Platform = 'Android'): Promise<ApiResponse<T>> {
+  private async request<T>(method: string, path: string, params?: Record<string, string>, platform: Platform = 'Android', familyOverride?: RobotFamily): Promise<ApiResponse<T>> {
     const url = method === 'GET' && params
       ? `${API_BASE}/${path}?${new URLSearchParams(params)}`
       : `${API_BASE}/${path}`;
@@ -419,7 +419,7 @@ export class UnitreeCloudAPI {
 
     const resp = await fetch(url, {
       method,
-      headers: buildHeaders(this.token, platform, this._family, this._region),
+      headers: buildHeaders(this.token, platform, familyOverride ?? this._family, this._region),
       body: method === 'POST' && params ? new URLSearchParams(params) : undefined,
       signal: AbortSignal.timeout(15000),
     });
@@ -489,8 +489,8 @@ export class UnitreeCloudAPI {
     return resp.data as T;
   }
 
-  async post<T>(path: string, params?: Record<string, string>): Promise<T> {
-    const resp = await this.request<T>('POST', path, params);
+  async post<T>(path: string, params?: Record<string, string>, familyOverride?: RobotFamily): Promise<T> {
+    const resp = await this.request<T>('POST', path, params, 'Android', familyOverride);
     if (resp.code !== 100) throw new UnitreeCloudError(resp.code, resp.errorMsg || `Error ${resp.code}`);
     return resp.data as T;
   }
@@ -646,6 +646,29 @@ export class UnitreeCloudAPI {
    */
   async unbindDevice(snEncrypted: string): Promise<void> {
     await this.post('device/unbind', { sn: snEncrypted });
+  }
+
+  /**
+   * `device/bindExtData` — re-upload the BLE V3 F2 RSA-wrapped key blob
+   * for a device that's *already* bound, and receive the freshly-derived
+   * 16-byte AES-128 key (32 hex chars) in the response. Mirrors the G1
+   * Explore APK's `MainRepository.bindExtData` (G1 1.5.1+ / Go2 1.1.15+).
+   *
+   * `snEncrypted` follows the same RSA-PKCS1v15 convention as `device/bind`
+   * — caller wraps it via `rsaEncryptSn`. `extData` is the raw 344-char
+   * base64 blob from the BLE F2 reassembly (chunked, MTU=104 required).
+   *
+   * Optional `family` override picks the AppName header (Go2 vs B2) per
+   * call rather than using the global pill, so refreshing a G1 key while
+   * the user is logged in as Go2 family (or vice versa) still matches the
+   * device's actual series. Pass `dev.series` from the caller — both
+   * "Go2" and "G1" map directly onto RobotFamily.
+   */
+  async bindExtData(snEncrypted: string, extData: string, family?: RobotFamily): Promise<string> {
+    return (await this.post<string>('device/bindExtData', {
+      extData,
+      sn: snEncrypted,
+    }, family)) || '';
   }
 
   async getDeviceOnlineStatus(sn: string): Promise<boolean> {

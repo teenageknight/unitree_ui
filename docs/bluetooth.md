@@ -12,8 +12,8 @@ Scan, connect, fetch SN + AP MAC, configure WiFi (SSID, password, STA / AP mode,
 
 Protocol versions:
 
-- **V1 / V2** — used by Go2 (all firmware) and G1 `< 1.5.1`. Standard Nordic UART or FFE0 service. See [bluetooth-v1-v2.md](bluetooth-v1-v2.md) for the full GATT layout and command schema.
-- **V3** — G1 `≥ 1.5.1` only. Adds two new characteristics: `VERSION` (`0xF1`) and `GCM_KEY` (`0xF2`). The UI gates V3 probes on the scanned BLE name (`/^G1[_\W]/i`) so Go2 robots never see V3 traffic. See [bluetooth-v3.md](bluetooth-v3.md) for the magic-prefix handshake and key-exchange details.
+- **V1 / V2** — used by legacy firmware (Go2 `< 1.1.15`, G1 `< 1.5.1`). Standard Nordic UART or FFE0 service. See [bluetooth-v1-v2.md](bluetooth-v1-v2.md) for the full GATT layout and command schema.
+- **V3** — G1 `≥ 1.5.1` and Go2 `≥ 1.1.15`. Adds two new opcodes: `VERSION` (`0xF1`) and `GCM_KEY` (`0xF2`). The UI gates V3 probes on the scanned BLE name (`/^(G1|Go2)[_\W]/i`); older firmware silently drops the probe so it fails soft (a few-second timeout). See [bluetooth-v3.md](bluetooth-v3.md) for the magic-prefix handshake and key-exchange details.
 
 ## Remote Control
 

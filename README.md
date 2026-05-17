@@ -21,7 +21,7 @@ Built with TypeScript, Three.js, and Vite.
 
 | Family | Firmware |
 |--------|----------|
-| **Go2** | 1.0.19 – 1.0.25, 1.1.1 – 1.1.14 *(latest)* |
+| **Go2** | 1.0.19 – 1.0.25, 1.1.1 – 1.1.15 *(latest)* |
 | **G1**  | 1.2.0 – 1.4.5, 1.5.1+ *(latest)* |
 
 ## Tour
@@ -76,25 +76,25 @@ npm run build && npm run preview
 - **Service manager** — list MCF services, start / stop with protection handling.
 - **Account manager** — Unitree cloud account: devices, firmware, tutorials, sharing, raw debug API console.
 - **3D LiDAR Mapping (SLAM)** — Go2 only: build maps, localize, navigate, patrol, auto-dock and charge; local IndexedDB cache + zip import/export.
-- **Bluetooth setup** — pair the robot over BLE (V1/V2 for Go2 + G1 < 1.5.1, V3 for G1 ≥ 1.5.1) to configure WiFi without the phone app.
+- **Bluetooth setup** — pair the robot over BLE (V1/V2 for legacy firmware, V3 for G1 ≥ 1.5.1 / Go2 ≥ 1.1.15) to configure WiFi without the phone app.
 - **BLE remote relay** — pair a Unitree BLE remote, forward joystick + buttons to the robot over WebRTC.
 - **Dark / light theme** — floating toggle, persisted per-browser; the 3D scene adapts on the fly.
 - **Connection modes** — Local Network (STA-L), Access Point (AP), Remote (TURN through Unitree cloud).
-- **Network scanner** — UDP multicast auto-discovery, including SN-targeted scan for G1 ≥ 1.5.1.
+- **Network scanner** — UDP multicast auto-discovery, including SN-targeted scan for V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15).
 
 ## Documentation
 
 | Topic | What's covered |
 |-------|---------------|
-| [Connection](docs/connection.md) | Family selection, STA-L / AP / Remote modes, network scan, AES-128 key flow for G1 ≥ 1.5.1 |
+| [Connection](docs/connection.md) | Family selection, STA-L / AP / Remote modes, network scan, AES-128 key flow for V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15) |
 | [Control View](docs/control.md) | Joysticks, action bar, modes, sport command IDs, BLE remote relay |
 | [Robot Status](docs/status.md) | Battery / motor / IMU / system panels for both families |
 | [Error Handling](docs/error-handling.md) | Fault wire protocol, Go2 + G1 source/code catalog, badge / popover / page UI |
 | [Service Manager](docs/services.md) | MCF service list, protection flag, start/stop |
 | [Account Manager](docs/account.md) | Cloud sign-in, devices, tutorials, debug console |
 | [Bluetooth](docs/bluetooth.md) | Robot provisioning + remote pairing overview |
-| [Bluetooth V1/V2 protocol](docs/bluetooth-v1-v2.md) | GATT layout for Go2 and G1 < 1.5.1 |
-| [Bluetooth V3 protocol](docs/bluetooth-v3.md) | G1 ≥ 1.5.1 magic-prefix + GCM key exchange |
+| [Bluetooth V1/V2 protocol](docs/bluetooth-v1-v2.md) | GATT layout for legacy firmware (Go2 < 1.1.15, G1 < 1.5.1) |
+| [Bluetooth V3 protocol](docs/bluetooth-v3.md) | Magic-prefix + GCM key exchange (G1 ≥ 1.5.1, Go2 ≥ 1.1.15) |
 | [BLE Remote Control](docs/remote-control.md) | Frame layout, axes/buttons mapping, WebRTC relay |
 | [SLAM](docs/slam.md) | Mapping → Localization → Navigation flow, patrol, auto-dock |
 | [LiDAR](docs/lidar.md) | Point cloud decoding pipeline |

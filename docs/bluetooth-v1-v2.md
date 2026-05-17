@@ -3,14 +3,16 @@
 This document describes the legacy BLE provisioning protocol used to scan, connect, and configure Unitree robots (WiFi setup, serial number, AP MAC).
 
 Related documents:
-- [bluetooth-v3.md](bluetooth-v3.md) — V3 extension (`VERSION` 0xF1, `GCM_KEY` 0xF2) introduced on G1 firmware 1.5.1. **Not** available on Go2.
+- [bluetooth-v3.md](bluetooth-v3.md) — V3 extension (`VERSION` 0xF1, `GCM_KEY` 0xF2) introduced on G1 firmware 1.5.1 and back-ported to Go2 1.1.15.
 - [remote-control.md](remote-control.md) — BLE remote (`Unitree-*`) protocol and the WebRTC relay that forwards remote inputs to the robot.
 
 ## Firmware Compatibility
 
 | Robot | Firmware | Service |
 |---|---|---|
-| Unitree Go2 | All released versions (`< 1.1.11` uses FFE0, `≥ 1.1.11` uses NUS) | V1 / V2 |
+| Unitree Go2 | `< 1.1.11` | V1 / V2 (FFE0 service) |
+| Unitree Go2 | `1.1.11 – 1.1.14` | V1 / V2 (NUS service) |
+| Unitree Go2 | `≥ 1.1.15` | V1 / V2 (NUS) + [V3 extension](bluetooth-v3.md) |
 | Unitree G1 | `< 1.5.1` | V1 / V2 |
 | Unitree G1 | `≥ 1.5.1` | V1 / V2 + [V3 extension](bluetooth-v3.md) |
 
@@ -179,7 +181,7 @@ def decrypt(data: bytes) -> bytes:
     return AES.new(KEY, AES.MODE_CFB, iv=IV, segment_size=128).decrypt(data)
 ```
 
-> **Note:** The V3 extension on G1 (firmware ≥ 1.5.1) sends a small set of additional commands **unencrypted** with a different magic prefix. See [bluetooth-v3.md](bluetooth-v3.md). On a V1/V2 connection, frames whose first byte is `0x00` (rather than the encrypted-frame distribution) belong to V3 and must be routed to the V3 handler before AES decryption is attempted.
+> **Note:** The V3 extension (G1 ≥ 1.5.1, Go2 ≥ 1.1.15) sends a small set of additional commands **unencrypted** with a different magic prefix. See [bluetooth-v3.md](bluetooth-v3.md). On a V1/V2 connection, frames whose first byte is `0x00` (rather than the encrypted-frame distribution) belong to V3 and must be routed to the V3 handler before AES decryption is attempted.
 
 ---
 
@@ -319,4 +321,4 @@ Each step waits for a success response before proceeding. The password step has 
 | WiFi STA mode byte | `0x02` |
 | Success status | `0x01` |
 
-For the V3 extension (`VERSION` 0xF1, `GCM_KEY` 0xF2 — G1 firmware ≥ 1.5.1 only), see [bluetooth-v3.md](bluetooth-v3.md). For the BLE remote control and the WebRTC relay that forwards its inputs to the robot, see [remote-control.md](remote-control.md).
+For the V3 extension (`VERSION` 0xF1, `GCM_KEY` 0xF2 — G1 firmware ≥ 1.5.1 and Go2 firmware ≥ 1.1.15), see [bluetooth-v3.md](bluetooth-v3.md). For the BLE remote control and the WebRTC relay that forwards its inputs to the robot, see [remote-control.md](remote-control.md).

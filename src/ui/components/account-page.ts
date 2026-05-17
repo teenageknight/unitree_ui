@@ -883,7 +883,61 @@ export class AccountPage {
         }
       } catch { /* ignore */ }
 
-
+      // Refresh AES Key — for already-bound devices on V3-capable firmware
+      // (G1 ≥ 1.5.1 / Go2 ≥ 1.1.15). Mirrors the G1 Explore APK's
+      // `bindExtData` flow: paste the 344-char base64 blob produced by the
+      // BLE V3 F2 (GCM_KEY) reassembly, the cloud RSA-decrypts it and
+      // returns the freshly-derived 16-byte AES-128 key. Result is cached
+      // locally so the WebRTC `data2=3` path picks it up next connect.
+      const aes = this.section('Refresh AES Key');
+      const blurb = document.createElement('div');
+      blurb.style.cssText = 'font-size:11px;color:#888;line-height:1.5;margin-bottom:8px;';
+      blurb.innerHTML = 'Paste the 344-char base64 blob from <strong style="color:#bbb;">BT page → robot panel → "344B RSA"</strong>. The cloud derives the 16-byte AES-128 key and stores it as <code style="color:#b3c0ff;">dev.key</code>.';
+      aes.appendChild(blurb);
+      const extWrap = this.input('extData blob (344-char base64)', 'text');
+      extWrap.input.spellcheck = false;
+      extWrap.input.autocomplete = 'off';
+      extWrap.input.placeholder = 'RvEUsChKiyIkiPP7DmPZ08q/QXIMQrTMU…';
+      aes.appendChild(extWrap.wrapper);
+      const aesStatus = document.createElement('div');
+      aesStatus.style.cssText = 'font-size:11px;color:#888;margin:6px 0;min-height:14px;font-family:monospace;word-break:break-all;';
+      aes.appendChild(aesStatus);
+      const refreshBtn = this.button('Refresh AES Key', async () => {
+        const extData = extWrap.input.value.trim();
+        if (!extData) {
+          aesStatus.style.color = '#e57373';
+          aesStatus.textContent = 'Paste the 344-char extData blob first.';
+          return;
+        }
+        refreshBtn.disabled = true;
+        aesStatus.style.color = '#888';
+        aesStatus.textContent = 'Encrypting SN…';
+        try {
+          const snEncrypted = await rsaEncryptSn(dev.sn);
+          aesStatus.textContent = 'Calling device/bindExtData…';
+          // Pin AppName to the device's series so the call works regardless
+          // of the account-family pill (Go2 device on G1 account or vice
+          // versa). Everything other than Go2 maps onto the Explorer-line.
+          const devFamily = dev.series.startsWith('Go2') ? 'Go2' : 'G1';
+          const newKey = (await cloudApi.bindExtData(snEncrypted, extData, devFamily)).trim();
+          if (!/^[0-9a-fA-F]{32}$/.test(newKey)) {
+            aesStatus.style.color = '#e57373';
+            aesStatus.textContent = `Unexpected response (not 32 hex): ${newKey || '<empty>'}`;
+            refreshBtn.disabled = false;
+            return;
+          }
+          setCachedAesKey(dev.sn, newKey);
+          aesStatus.style.color = '#66bb6a';
+          aesStatus.textContent = `✓ AES-128 key: ${newKey}`;
+        } catch (e) {
+          aesStatus.style.color = '#e57373';
+          aesStatus.textContent = `Failed: ${e instanceof Error ? e.message : String(e)}`;
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      });
+      aes.appendChild(refreshBtn);
+      this.content.appendChild(aes);
 
       // Danger zone — unbind goes through `device/unbind` with an RSA-
       // encrypted SN (same convention as device/bind / device/bindExtData).

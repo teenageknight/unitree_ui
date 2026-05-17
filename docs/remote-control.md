@@ -233,4 +233,4 @@ The remote-status UI in the Unitree app maps the RSSI byte (offset 19 of the BLE
 | WebRTC topic | `rt/wirelesscontroller` |
 | Keys bitmask | uint16, bits 0–15 = R1,L1,Start,Select,R2,L2,F1,F2,A,B,X,Y,Up,Right,Down,Left |
 
-For the robot-side BLE protocol (provisioning, WiFi, serial number), see [bluetooth-v1-v2.md](bluetooth-v1-v2.md). For the V3 extension on G1 ≥ 1.5.1, see [bluetooth-v3.md](bluetooth-v3.md).
+For the robot-side BLE protocol (provisioning, WiFi, serial number), see [bluetooth-v1-v2.md](bluetooth-v1-v2.md). For the V3 extension on G1 ≥ 1.5.1 / Go2 ≥ 1.1.15, see [bluetooth-v3.md](bluetooth-v3.md).

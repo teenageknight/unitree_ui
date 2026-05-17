@@ -1,6 +1,6 @@
-# Bluetooth Protocol V3 — Unitree G1
+# Bluetooth Protocol V3 — Unitree G1 + Go2
 
-V3 is a small extension to the V1/V2 BLE protocol introduced on the Unitree G1. It runs over the **same** GATT service and characteristics (FFE0 / FFE1 / FFE2 — see [bluetooth-v1-v2.md § Service UUIDs](bluetooth-v1-v2.md#service-uuids)) and coexists on the same connection: a single notify subscription receives both V1/V2 (encrypted) and V3 (unencrypted) frames, distinguished by their first byte.
+V3 is a small extension to the V1/V2 BLE protocol. First shipped on the Unitree G1 with firmware 1.5.1, then back-ported to the Unitree Go2 starting with firmware 1.1.15. It runs over the **same** GATT service and characteristics (FFE0 / FFE1 / FFE2 — see [bluetooth-v1-v2.md § Service UUIDs](bluetooth-v1-v2.md#service-uuids)) and coexists on the same connection: a single notify subscription receives both V1/V2 (encrypted) and V3 (unencrypted) frames, distinguished by their first byte.
 
 V3 introduces two distinct categories of frames on top of V1/V2:
 
@@ -9,7 +9,7 @@ V3 introduces two distinct categories of frames on top of V1/V2:
 
 The plaintext probe path:
 
-- `0xF1` — historically named `VERSION` in the apk's enum, but the response carries the **device serial number** along with a small header (BLE module version byte + a flag byte). On G1 ≥ 1.5.1 this is what the apk uses to identify the robot before any GCM-encrypted command exchange — see [F1 Layout](#f1-version--device-id) below.
+- `0xF1` — historically named `VERSION` in the apk's enum, but the response carries the **device serial number** along with a small header (BLE module version byte + a flag byte). On V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15) this is what the apk uses to identify the robot before any GCM-encrypted command exchange — see [F1 Layout](#f1-version--device-id) below.
 - `0xF2` — historically named `GCM_KEY`, but the response is **not** a plain AES key — it's a 256-byte RSA-encrypted blob (344 base64 chars) that the cloud server-side decrypts to derive the per-device 16-byte AES-128 key used for WebRTC `data2=3` authentication and for GCM-wrapping V1/V2 BLE commands.
 
 Plaintext F1/F2 frames are not AES-CFB encrypted; they are framed with a fixed magic prefix so receivers can tell them apart from V1/V2 ciphertext. GCM-wrapped command frames have no magic prefix — they are demuxed from V1/V2 ciphertext by attempting GCM-decrypt first when an AES key is loaded.
@@ -20,7 +20,8 @@ Plaintext F1/F2 frames are not AES-CFB encrypted; they are framed with a fixed m
 |---|---|---|
 | Unitree G1 | `≥ 1.5.1` | ✅ Yes |
 | Unitree G1 | `< 1.5.1` | ❌ No (V1/V2 only) |
-| Unitree Go2 | All versions | ❌ No (V3 was never shipped on Go2) |
+| Unitree Go2 | `≥ 1.1.15` | ✅ Yes |
+| Unitree Go2 | `< 1.1.15` | ❌ No (V1/V2 only) |
 
 A client targeting both robot families must:
 1. Connect normally per [V1/V2 Connection Flow](bluetooth-v1-v2.md#robot-connection-flow).
@@ -129,7 +130,7 @@ def on_v3_frame(raw: bytes) -> tuple[int, str] | None:
 
 ### `0xF1` VERSION / Device-ID
 
-Despite the name, this command's response carries the **device serial number** along with a small header (BLE module version + a flag byte). It's both a "do you speak V3?" probe *and* the canonical way to identify the connected robot before any AES key is established — the apk's `dogSn` field is set straight from this frame on G1 ≥ 1.5.1.
+Despite the name, this command's response carries the **device serial number** along with a small header (BLE module version + a flag byte). It's both a "do you speak V3?" probe *and* the canonical way to identify the connected robot before any AES key is established — the apk's `dogSn` field is set straight from this frame on V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15).
 
 #### F1 Layout
 
@@ -257,8 +258,8 @@ APP  → COUNTRY    (op 0x06) ──► robot  ◄── ack op 0x06 result 0x01
 The key returned by `0xF2` is the secret used for `data2=3` WebRTC SDP authentication. The Unitree app derives a session nonce from the SDP offer/answer, encrypts it with this key under AES-128-GCM, and includes the ciphertext + tag in the signaling payload. The robot decrypts and validates the nonce before establishing the WebRTC peer connection.
 
 Without the GCM key:
-- WebRTC handshakes against G1 firmware ≥ 1.5.1 will fail at the `data2=3` step.
-- Older firmware (G1 `< 1.5.1`, all Go2) does not require this auth and accepts unauthenticated SDP exchanges.
+- WebRTC handshakes against V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15) will fail at the `data2=3` step.
+- Older firmware (G1 `< 1.5.1`, Go2 `< 1.1.15`) does not require this auth — `con_notify` returns `data2=2` (static GCM key) and the SDP exchange is accepted unauthenticated.
 
 The key is per-device and not user-secret in the strong sense (the robot freely hands it out over BLE to any client that completes the V1/V2 handshake), but it should be cached locally rather than re-fetched on every WebRTC session.
 
@@ -268,8 +269,8 @@ The V1/V2 `HANDSHAKE` / `0x01` SECRET exchange is still required at connect time
 
 After connect, the picture differs by firmware:
 
-- **G1 ≥ 1.5.1.** Plaintext F1/F2 frames flow alongside GCM-wrapped command frames. The legacy V1/V2 AES-CFB path is **not** used for `GET_SN` / `GET_AP_MAC` / WiFi ops on this firmware — those have all moved into the GCM envelope. Sending a V1/V2 AES-CFB request here is silently dropped.
-- **G1 < 1.5.1, all Go2.** No V3 at all. `GET_SN` / `GET_AP_MAC` / WiFi flow stay on the V1/V2 AES-CFB path documented in [bluetooth-v1-v2.md](bluetooth-v1-v2.md).
+- **V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15).** Plaintext F1/F2 frames flow alongside GCM-wrapped command frames. The legacy V1/V2 AES-CFB path is **not** used for `GET_SN` / `GET_AP_MAC` / WiFi ops on this firmware — those have all moved into the GCM envelope. Sending a V1/V2 AES-CFB request here is silently dropped.
+- **Legacy firmware (G1 < 1.5.1, Go2 < 1.1.15).** No V3 at all. `GET_SN` / `GET_AP_MAC` / WiFi flow stay on the V1/V2 AES-CFB path documented in [bluetooth-v1-v2.md](bluetooth-v1-v2.md).
 
 A correctly-implemented notify handler therefore demuxes three classes of inbound frame:
 
@@ -327,7 +328,7 @@ Routing V3 plaintext frames to the AES-CFB decryptor is a frequent porting bug �
 
 | Constant | Value |
 |---|---|
-| Min firmware | G1 1.5.1 |
+| Min firmware | G1 1.5.1 / Go2 1.1.15 |
 | Min MTU | 32 (negotiate 104 to match the apk) |
 | AES key length | 16 bytes (32 hex chars) |
 | Per-device AES key file (on-robot) | `/unitree/etc/key/aes_key.bin` (RSA-wrapped, not raw) |

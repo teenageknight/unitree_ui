@@ -5,9 +5,11 @@ import { GamepadManager } from './components/gamepad-manager';
 import { NavBar } from './components/status-bar';
 import { ActionBar } from './components/action-bar';
 import { PipCamera } from './components/pip-camera';
-import { SettingBar, EmergencyStop, type InputSource } from './components/side-buttons';
+import { EmergencyStop, type InputSource } from './components/side-buttons';
+import { SettingsDrawer } from './components/settings-drawer';
 import { StatusPage } from './components/status-page';
 import { ServicesPage, type ServiceEntry } from './components/services-page';
+import { SettingsPage, type SettingsState } from './components/settings-page';
 import { MappingPage } from './components/mapping-page';
 import { AccountPage } from './components/account-page';
 import { BtStatusIcon, type BluetoothStatus } from './components/bt-status-icon';
@@ -29,7 +31,7 @@ import { ErrorsPage } from './components/errors-page';
 import type { WebRTCConnection } from '../connection/webrtc';
 import type { Scene3D } from './scene/scene';
 
-type Screen = 'landing' | 'connection' | 'hub' | 'control' | 'status' | 'services' | 'mapping' | 'account' | 'bt' | 'errors';
+type Screen = 'landing' | 'connection' | 'hub' | 'control' | 'status' | 'services' | 'settings' | 'mapping' | 'account' | 'bt' | 'errors';
 
 export class App {
   private root: HTMLElement;
@@ -51,13 +53,31 @@ export class App {
   private controlUi: HTMLElement | null = null;
   private actionBar: ActionBar | null = null;
   private scene3d: Scene3D | null = null;
-  private settingBar: SettingBar | null = null;
+  // Control-view chrome: the settings icon in the navbar opens this
+  // drawer, which also hosts BT-remote / gamepad selection (replaces
+  // the old SettingBar and the standalone input-source picker).
+  private settingsDrawer: SettingsDrawer | null = null;
 
   // Status page
   private statusPage: StatusPage | null = null;
 
   // Services page
   private servicesPage: ServicesPage | null = null;
+  // Settings page (hub-side duplicate of the WebView SettingBar +
+  // APK-only Data > Remote Control and Data > Permission surfaces).
+  private settingsPage: SettingsPage | null = null;
+  private settingsState: SettingsState = {
+    radarOn: false,
+    lidarOn: true,
+    volume: 0,
+    brightness: 0,
+    waistLocked: false,
+    remoteSwitchOn: false,
+    remoteId: '',
+    internetRemoteOn: false,
+    inputSources: [],
+    activeInputSourceId: null,
+  };
   private mappingPage: MappingPage | null = null;
   private accountPage: AccountPage | null = null;
   private serviceEntries: ServiceEntry[] = [];
@@ -147,16 +167,15 @@ export class App {
     this.btStatusIcon = new BtStatusIcon(document.body);
     this.btStatusIcon.onStatusChange((s) => {
       this.btStatus = s;
-      // Update nav-bar BT icon (control view)
-      this.updateNavBarBtIcon();
       // Update mapping page's inline BT icon if present.
       this.mappingPage?.setBtStatus(s);
-      if (this.currentScreen === 'control') {
-        this.refreshInputSources();
-        // If the active BT remote dropped out, fall back to on-screen joysticks.
-        if (!s.remoteConnected && this.activeSourceId?.startsWith('bt:')) {
-          this.setActiveInputSource(null);
-        }
+      // BT-remote / gamepad list now also lives in the Settings page +
+      // drawer (BT Remote section), so refresh on every status change
+      // rather than only on the control screen.
+      this.refreshInputSources();
+      // If the active BT remote dropped out, fall back to on-screen joysticks.
+      if (!s.remoteConnected && this.activeSourceId?.startsWith('bt:')) {
+        this.setActiveInputSource(null);
       }
     });
 
@@ -180,9 +199,9 @@ export class App {
     this.gamepadManager = new GamepadManager((connected, id) => {
       this.gamepadConnected = connected;
       this.gamepadName = id;
-      if (this.currentScreen === 'control') {
-        this.refreshInputSources();
-      }
+      // Refresh on every change — Settings page + drawer both render
+      // the BT-remote list, not just the control view.
+      this.refreshInputSources();
       // If the active gamepad disappeared, fall back to on-screen joysticks.
       if (!connected && this.activeSourceId?.startsWith('gamepad:')) {
         this.setActiveInputSource(null);
@@ -358,6 +377,16 @@ export class App {
     else svcBtn.disabled = true;
     btnRow.appendChild(svcBtn);
 
+    // Settings — duplicate of the in-WebView SettingBar (radar / lidar /
+    // lamp / volume / waist-lock). Lets the user tweak these from the hub
+    // without entering the control view.
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = `hub-btn ${needsWebRTC ? 'hub-btn-disabled' : 'hub-btn-secondary'}`;
+    settingsBtn.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span>Settings</span>`;
+    if (!needsWebRTC) settingsBtn.addEventListener('click', () => this.showSettingsScreen());
+    else settingsBtn.disabled = true;
+    btnRow.appendChild(settingsBtn);
+
     // 3D LiDAR Mapping button — Go2 only. The G1 Explorer webview doesn't
     // expose any mapping UI even though the URDF includes a mid360 LiDAR
     // (verified against the decompiled APK 1.9.3 — pages/ has no mapping
@@ -403,11 +432,13 @@ export class App {
 
     this.init3DScene();
 
-    // Nav bar (top) — back goes to hub, not disconnect.
-    // BT icon is a passive status indicator (matches the floating one);
-    // the actual BT controls live on the landing-page Bluetooth tile.
-    this.navBar = new NavBar(this.controlUi, () => this.goToHub(), this.errorStore);
-    this.updateNavBarBtIcon();
+    // Nav bar (top) — back goes to hub. The settings icon at the right
+    // opens the in-control settings drawer, which is now the sole entry
+    // point for BT-remote / gamepad selection (replaces the old passive
+    // BT icon and the separate input-source picker).
+    this.navBar = new NavBar(this.controlUi, () => this.goToHub(), this.errorStore, {
+      onMenuClick: () => this.openSettingsDrawer(),
+    });
 
     // PIP camera. The PIP bubble swaps the 3D scene and the camera between
     // main-view and pip on tap. G1 has no 3D scene (camera is the only
@@ -421,16 +452,9 @@ export class App {
       this.pipCamera.setOnTap(() => this.toggleViewMode());
     }
 
-    // Setting bar
-    this.settingBar = new SettingBar(this.controlUi, {
-      family: cloudApi.connectFamily,
-      onRadarToggle: (enabled) => this.sendRadarToggle(enabled),
-      onLidarToggle: (enabled) => this.sendLidarToggle(enabled),
-      onLampSet: (level) => this.sendLamp(level),
-      onVolumeSet: (level) => this.sendVolume(level),
-      onInputSourceSelect: (id) => this.setActiveInputSource(id),
-      onWaistLockToggle: (lock) => this.sendWaistLock(lock),
-    });
+    // Settings drawer — mounted on document.body so the slide-in
+    // animation isn't clipped by the control overlay.
+    this.settingsDrawer = new SettingsDrawer(this.settingsState, this.buildSettingsCallbacks());
     this.refreshInputSources();
     if (this.activeSourceId !== null) {
       // Active source still selected → keep on-screen joysticks hidden.
@@ -537,6 +561,71 @@ export class App {
     this.requestServiceReport();
   }
 
+  private showSettingsScreen(): void {
+    this.currentScreen = 'settings';
+    this.root.innerHTML = '';
+    this.root.className = 'app-root settings-screen';
+    this.btStatusIcon?.setVisible(true); this.themeToggle?.setVisible(true);
+    this.accountStatusIcon?.setVisible(true);
+    this.errorsBadgeFloating?.setVisible(true);
+
+    this.settingsPage = new SettingsPage(
+      this.root,
+      this.settingsState,
+      () => this.goToHub(),
+      this.buildSettingsCallbacks(),
+    );
+
+    this.probeSettingsState();
+    // Push current input-source state into the freshly-built page so
+    // the BT Remote section renders the right rows on entry.
+    this.refreshInputSources();
+  }
+
+  /** Single source of truth for the SettingsCallbacks bundle. Both the
+   *  hub Settings page and the in-control drawer use this so the same
+   *  controls live in both places. */
+  private buildSettingsCallbacks() {
+    return {
+      family: cloudApi.connectFamily,
+      onRadarToggle: (enabled: boolean) => this.sendRadarToggle(enabled),
+      onLidarToggle: (enabled: boolean) => this.sendLidarToggle(enabled),
+      onLampSet: (level: number) => this.sendLamp(level),
+      onVolumeSet: (level: number) => this.sendVolume(level),
+      onWaistLockToggle: (lock: boolean) => this.sendWaistLock(lock),
+      onRemoteSwitchToggle: (on: boolean) => this.sendRemoteSwitch(on),
+      onRemoteIdSet: (id: string) => this.sendRemoteIdSet(id),
+      onInternetRemoteToggle: (on: boolean) => this.sendInternetRemote(on),
+      onInputSourceSelect: (id: string | null) => this.setActiveInputSource(id),
+    };
+  }
+
+  /** Fire the GETs that populate the Settings page / drawer:
+   *   - VUI 1004/1006   → volume / brightness
+   *   - OBSTACLES 1002  → obstacle-avoid (Go2)
+   *   - rm_con 1001     → internet remote permission
+   *   - get_rfpower.sh  → BLE remote-control radio state (Go2)
+   *
+   *  Used on Settings-page entry and on every drawer open. */
+  private probeSettingsState(): void {
+    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1004);
+    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1006);
+    this.dataHandler?.publishRequest(RTC_TOPIC.OBSTACLES_AVOID, 1002);
+    this.dataHandler?.publishRequest(RTC_TOPIC.PERMISSION_NET, 1001);
+    if (cloudApi.connectFamily !== 'G1') {
+      this.runBashScript('get_rfpower.sh');
+    }
+  }
+
+  private openSettingsDrawer(): void {
+    if (!this.settingsDrawer) return;
+    // Push the latest cached state into the drawer before opening so
+    // toggles aren't stale, then probe the dog for fresh values.
+    this.settingsDrawer.setState(this.settingsState);
+    this.settingsDrawer.open();
+    this.probeSettingsState();
+  }
+
   private showErrorsScreen(): void {
     this.currentScreen = 'errors';
     this.root.innerHTML = '';
@@ -633,11 +722,13 @@ export class App {
     this.pipCamera = null;
     this.navBar = null;
     this.actionBar = null;
-    this.settingBar = null;
+    this.settingsDrawer?.destroy();
+    this.settingsDrawer = null;
     this.scene3d?.destroy();
     this.scene3d = null;
     this.statusPage = null;
     this.servicesPage = null;
+    this.settingsPage = null;
     this.errorsPage = null;
     this.mappingPage?.destroy();
     this.mappingPage = null;
@@ -804,24 +895,12 @@ export class App {
     }
   }
 
-  // ── Nav-bar BT icon ──
-
-  private updateNavBarBtIcon(): void {
-    if (!this.navBar) return;
-    const s = this.btStatus;
-    const connected = s.robotConnected || s.remoteConnected;
-    const parts: string[] = [];
-    if (s.robotConnected) parts.push(`Robot: ${s.robotAddress}`);
-    if (s.remoteConnected) parts.push(`Remote: ${s.remoteName || s.remoteAddress}`);
-    const tooltip = connected ? parts.join(' · ') : 'Bluetooth: not connected';
-    this.navBar.setBluetoothStatus(connected, tooltip);
-  }
-
   // ── Input Source (BT relay or USB/HID gamepad) ──
 
-  /** Build the picker source list from current BT + gamepad availability and
-   *  push it to the SettingBar. Each "kind" currently has at most one entry
-   *  (backend constraint); when that grows the list just gets longer. */
+  /** Build the picker source list from current BT + gamepad availability
+   *  and push it to the navbar input-source icon. Each "kind" currently
+   *  has at most one entry (backend constraint); when that grows the list
+   *  just gets longer. */
   private refreshInputSources(): void {
     const sources: InputSource[] = [];
     if (this.btStatus.remoteConnected) {
@@ -839,8 +918,16 @@ export class App {
         label: this.gamepadName || 'USB / wireless gamepad',
       });
     }
-    this.settingBar?.setInputSources(sources);
-    this.settingBar?.setActiveInputSource(this.activeSourceId);
+    this.settingsState.inputSources = sources;
+    this.settingsState.activeInputSourceId = this.activeSourceId;
+    this.settingsPage?.setState({
+      inputSources: sources,
+      activeInputSourceId: this.activeSourceId,
+    });
+    this.settingsDrawer?.setState({
+      inputSources: sources,
+      activeInputSourceId: this.activeSourceId,
+    });
   }
 
   /** Switch the active input source. Pass null to fall back to on-screen
@@ -884,9 +971,9 @@ export class App {
       // Gamepad path: startJoystickLoop reads gamepadManager.currentState directly.
     }
 
-    if (this.currentScreen === 'control') {
-      this.settingBar?.setActiveInputSource(this.activeSourceId);
-    }
+    this.settingsState.activeInputSourceId = this.activeSourceId;
+    this.settingsPage?.setState({ activeInputSourceId: this.activeSourceId });
+    this.settingsDrawer?.setState({ activeInputSourceId: this.activeSourceId });
   }
 
   // ── Video & Topic Subscriptions ──
@@ -969,6 +1056,7 @@ export class App {
    *  BaseRunner.G1_SETUP_MACHINE_TYPE with arg "6"=lock / "5"=unlock,
    *  per BaseInfoViewModel.kt:570. */
   private sendWaistLock(lock: boolean): void {
+    this.settingsState.waistLocked = lock;
     this.runBashScript(`demarcate_setup_machine_type.sh ${lock ? 6 : 5}`);
   }
 
@@ -994,15 +1082,20 @@ export class App {
     if (msg.type === DATA_CHANNEL_TYPE.RESPONSE) {
       if (msg.topic === 'rt/api/vui/response') { this.handleVuiResponse(msg.data); return; }
       if (msg.topic === 'rt/api/obstacles_avoid/response') { this.handleObstacleResponse(msg.data); return; }
+      if (msg.topic === 'rt/api/rm_con/response') { this.handlePermissionNetResponse(msg.data); return; }
       if (msg.topic === 'rt/api/bashrunner/response') { this.handleBashrunnerResponse(msg.data); return; }
       if (msg.topic === 'rt/api/motion_switcher/response') { this.handleMotionSwitcherResponse(msg.data); return; }
       if (msg.topic === 'rt/api/robot_state/response') { this.handleRobotStateResponse(msg.data); return; }
       if (msg.topic === 'rt/api/sport/response') {
+        // Sport responses carry the echo of action-bar requests. Logging
+        // is left to the failure path: only surface errors so the
+        // console stays quiet for the happy path.
         const d = msg.data as { header?: { identity?: { api_id?: number }; status?: { code?: number } }; data?: unknown };
-        const apiId = d?.header?.identity?.api_id;
         const code = d?.header?.status?.code;
-        const ok = code === 0;
-        console.log(`[go2:action] ${ok ? 'RES ←' : 'ERR ←'} api_id=${apiId} code=${code}${d?.data !== undefined ? ' data=' + JSON.stringify(d.data) : ''}`);
+        if (code !== 0) {
+          const apiId = d?.header?.identity?.api_id;
+          console.warn(`[go2:action] ERR ← api_id=${apiId} code=${code}${d?.data !== undefined ? ' data=' + JSON.stringify(d.data) : ''}`);
+        }
         return;
       }
     }
@@ -1258,10 +1351,33 @@ export class App {
     try {
       const parsed = JSON.parse(d.data) as { volume?: number; brightness?: number };
       if (apiId === 1004 && parsed.volume !== undefined) {
-        this.settingBar?.setVolume(parsed.volume);
+        this.settingsState.volume = parsed.volume;
+        this.settingsPage?.setState({ volume: parsed.volume });
+        this.settingsDrawer?.setState({ volume: parsed.volume });
       } else if (apiId === 1006 && parsed.brightness !== undefined) {
-        this.settingBar?.setBrightness(parsed.brightness);
+        this.settingsState.brightness = parsed.brightness;
+        this.settingsPage?.setState({ brightness: parsed.brightness });
+        this.settingsDrawer?.setState({ brightness: parsed.brightness });
       }
+    } catch { /* malformed */ }
+  }
+
+  /** Cloud / internet-remote permission echo (rm_con topic).
+   *  GET (api_id 1001) and SET (api_id 1002) both return
+   *  `{ enable_status: 1|2 }` — 2 means enabled. From NetPermissionModel.kt. */
+  private handlePermissionNetResponse(data: unknown): void {
+    const d = data as {
+      header?: { status?: { code?: number } };
+      data?: string;
+    };
+    if (d.header?.status?.code !== 0 || typeof d.data !== 'string') return;
+    try {
+      const parsed = JSON.parse(d.data) as { enable_status?: number };
+      if (parsed.enable_status === undefined) return;
+      const on = parsed.enable_status === 2;
+      this.settingsState.internetRemoteOn = on;
+      this.settingsPage?.setState({ internetRemoteOn: on });
+      this.settingsDrawer?.setState({ internetRemoteOn: on });
     } catch { /* malformed */ }
   }
 
@@ -1274,7 +1390,9 @@ export class App {
       try {
         const parsed = JSON.parse(d.data) as { enable?: boolean };
         if (parsed.enable !== undefined) {
-          this.settingBar?.setRadar(parsed.enable);
+          this.settingsState.radarOn = parsed.enable;
+          this.settingsPage?.setState({ radarOn: parsed.enable });
+          this.settingsDrawer?.setState({ radarOn: parsed.enable });
         }
       } catch { /* malformed */ }
     }
@@ -1335,6 +1453,15 @@ export class App {
 
     if (code !== 0 || typeof d.data !== 'string') {
       if (scriptLine) console.warn(`[bashrunner] ${scriptName} failed (code=${code})`);
+      // Optimistic SettingsPage toggles need to be reverted on failure —
+      // re-fire get_rfpower.sh to put the UI back in sync with the dog.
+      if (
+        scriptName === 'demarcate_turnon_clicker.sh' ||
+        scriptName === 'demarcate_turnoff_clicker.sh' ||
+        scriptName === 'set_remote_id.sh'
+      ) {
+        this.runBashScript('get_rfpower.sh');
+      }
       return;
     }
 
@@ -1380,6 +1507,52 @@ export class App {
       }
       case 'get_software_version.sh': {
         if (typeof info === 'string') this.robotState.softwareVersion = info;
+        break;
+      }
+      case 'get_rfpower.sh': {
+        // Bound when info == "1", off otherwise. RemoteBindActivity.kt:95
+        // compares `info` against IcyHeaders.REQUEST_HEADER_ENABLE_METADATA_VALUE
+        // — an ExoPlayer constant whose value is literally the string "1"
+        // (so reading the decompiled Kotlin as `info == "enable"` is
+        // misleading; the wire value is "1"/"0").
+        const infoStr = typeof info === 'string' ? info.trim() : '';
+        const on = infoStr === '1';
+        this.settingsState.remoteSwitchOn = on;
+        this.settingsPage?.setState({ remoteSwitchOn: on });
+        this.settingsDrawer?.setState({ remoteSwitchOn: on });
+        // If the switch is on, fetch the bound ID — APK does the same.
+        if (on) this.runBashScript('get_rfid.sh');
+        else {
+          this.settingsPage?.setState({ remoteId: '' });
+          this.settingsDrawer?.setState({ remoteId: '' });
+        }
+        break;
+      }
+      case 'get_rfid.sh': {
+        const rid = typeof info === 'string' ? info.trim() : '';
+        this.settingsState.remoteId = rid;
+        this.settingsPage?.setState({ remoteId: rid });
+        this.settingsDrawer?.setState({ remoteId: rid });
+        break;
+      }
+      case 'demarcate_turnon_clicker.sh': {
+        // Succeeded — radio is on. Re-fetch ID if we don't have one yet.
+        this.settingsState.remoteSwitchOn = true;
+        this.settingsPage?.setState({ remoteSwitchOn: true });
+        this.settingsDrawer?.setState({ remoteSwitchOn: true });
+        if (!this.settingsState.remoteId) this.runBashScript('get_rfid.sh');
+        break;
+      }
+      case 'demarcate_turnoff_clicker.sh': {
+        this.settingsState.remoteSwitchOn = false;
+        this.settingsState.remoteId = '';
+        this.settingsPage?.setState({ remoteSwitchOn: false, remoteId: '' });
+        this.settingsDrawer?.setState({ remoteSwitchOn: false, remoteId: '' });
+        break;
+      }
+      case 'set_remote_id.sh': {
+        // APK refetches the ID on success — do the same.
+        this.runBashScript('get_rfid.sh');
         break;
       }
       case 'get_whole_packet_version.sh':
@@ -1612,10 +1785,12 @@ export class App {
   }
 
   private sendRadarToggle(enabled: boolean): void {
+    this.settingsState.radarOn = enabled;
     this.dataHandler?.publishRequest(RTC_TOPIC.OBSTACLES_AVOID, 1001, JSON.stringify({ enable: enabled }));
   }
 
   private sendLidarToggle(enabled: boolean): void {
+    this.settingsState.lidarOn = enabled;
     const state = enabled ? 'ON' : 'OFF';
     for (let i = 0; i < 5; i++) {
       setTimeout(() => this.dataHandler?.publish(RTC_TOPIC.LIDAR_SWITCH, state), i * 100);
@@ -1625,11 +1800,40 @@ export class App {
   }
 
   private sendLamp(level: number): void {
+    this.settingsState.brightness = level;
     this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1005, JSON.stringify({ brightness: level }));
   }
 
   private sendVolume(level: number): void {
+    this.settingsState.volume = level;
     this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1003, JSON.stringify({ volume: level }));
+  }
+
+  /** Toggle the dog's RF remote-control radio. APK fires
+   *  demarcate_turnon_clicker.sh / demarcate_turnoff_clicker.sh via the
+   *  BashRunner topic; the on path also re-fetches the bound ID. */
+  private sendRemoteSwitch(enabled: boolean): void {
+    this.runBashScript(enabled ? 'demarcate_turnon_clicker.sh' : 'demarcate_turnoff_clicker.sh');
+  }
+
+  /** Bind a new BLE remote by ID — APK fires set_remote_id.sh <id>.
+   *  Response is followed by an automatic get_rfid.sh re-read. */
+  private sendRemoteIdSet(id: string): void {
+    const trimmed = id.trim();
+    if (!trimmed) return;
+    this.runBashScript(`set_remote_id.sh ${trimmed}`);
+  }
+
+  /** Toggle the cloud / internet remote-connection permission.
+   *  rt/api/rm_con/request — api_id 1002, params { enable_status: 2|1 }.
+   *  enable_status == 2 means enabled. Verified from NetPermissionModel.kt. */
+  private sendInternetRemote(enabled: boolean): void {
+    this.settingsState.internetRemoteOn = enabled;
+    this.dataHandler?.publishRequest(
+      RTC_TOPIC.PERMISSION_NET,
+      1002,
+      JSON.stringify({ enable_status: enabled ? 2 : 1 }),
+    );
   }
 
   private disconnect(): void {
@@ -1649,9 +1853,11 @@ export class App {
     this.pipCamera = null;
     this.navBar = null;
     this.actionBar = null;
-    this.settingBar = null;
+    this.settingsDrawer?.destroy();
+    this.settingsDrawer = null;
     this.statusPage = null;
     this.servicesPage = null;
+    this.settingsPage = null;
     this.errorsPage = null;
     this.errorStore.clear();
     this.mappingPage?.destroy();
@@ -1659,6 +1865,11 @@ export class App {
     this.accountPage?.destroy();
     this.accountPage = null;
     this.serviceEntries = [];
+    this.settingsState = {
+      radarOn: false, lidarOn: true, volume: 0, brightness: 0, waistLocked: false,
+      remoteSwitchOn: false, remoteId: '', internetRemoteOn: false,
+      inputSources: [], activeInputSourceId: null,
+    };
     if (this.serviceReportTimer) {
       clearInterval(this.serviceReportTimer);
       this.serviceReportTimer = null;

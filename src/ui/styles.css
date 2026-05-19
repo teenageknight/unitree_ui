@@ -716,6 +716,158 @@ html[data-theme="light"] .auth-tab.active {
   pointer-events: none;
 }
 
+/* ── NavBar circular icons (input source + 3-dot menu) ──
+   Match the inline-styled BT / theme icons in status-bar.ts. */
+.nav-circle-icon {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(26, 29, 35, 0.95);
+  border: 1.5px solid #3a3d45;
+  margin-left: 4px;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  padding: 0;
+}
+
+.nav-circle-icon:hover {
+  transform: scale(1.05);
+  border-color: #6879e4;
+}
+
+.nav-circle-icon:active {
+  transform: scale(0.97);
+}
+
+.nav-circle-icon[data-active="true"] {
+  background: rgba(66, 207, 85, 0.15);
+  border-color: rgba(66, 207, 85, 0.5);
+}
+
+.nav-circle-icon:disabled {
+  cursor: not-allowed;
+}
+
+.nav-circle-icon:disabled:hover {
+  transform: none;
+  border-color: #3a3d45;
+}
+
+/* ── Settings Drawer (slide-in from the right, opened via 3-dot menu) ── */
+.settings-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  z-index: 100;
+  pointer-events: none;
+  transition: background 0.22s ease;
+}
+
+.settings-drawer-overlay.open {
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+.settings-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  background: #0f1114;
+  border-left: 1px solid #1f2229;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.settings-drawer-overlay.open .settings-drawer-panel {
+  transform: translateX(0);
+}
+
+.settings-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #1a1d23;
+  flex-shrink: 0;
+  background: rgba(15, 17, 20, 0.95);
+}
+
+.settings-drawer-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+}
+
+.settings-drawer-close {
+  background: rgba(26, 29, 35, 0.8);
+  border: 1px solid #2a2d35;
+  color: #b0b3bb;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-drawer-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.settings-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2d35 transparent;
+}
+
+/* The embedded SettingsPage drops its own page-header in drawer mode,
+   so the .settings-page wrapper just needs to flex naturally inside the
+   body. */
+.settings-drawer-body .settings-page {
+  height: auto;
+}
+
+/* Light-theme overrides for drawer chrome. */
+html[data-theme="light"] .settings-drawer-panel {
+  background: #f3f5fa;
+  border-left-color: #d4d9e4;
+  box-shadow: -12px 0 32px rgba(60, 75, 120, 0.18);
+}
+
+html[data-theme="light"] .settings-drawer-header {
+  background: rgba(243, 245, 250, 0.95);
+  border-bottom-color: #d4d9e4;
+}
+
+html[data-theme="light"] .settings-drawer-header h2 {
+  color: #1a1d23;
+}
+
+html[data-theme="light"] .settings-drawer-close {
+  background: #ffffff;
+  border-color: #c4cbd6;
+  color: #5a6170;
+}
+
+html[data-theme="light"] .settings-drawer-close:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: #1a1d23;
+}
+
 /* ── Setting Bar (Side Icons: Radar, Volume, Lamp) ── */
 .setting-bar {
   position: absolute;
@@ -1657,6 +1809,422 @@ html[data-theme="light"] .mapping-header-cluster .nav-bt-icon {
   animation: toastFade 3s forwards;
 }
 
+/* ── Settings Page (hub-side duplicate of the WebView SettingBar) ── */
+.app-root.settings-screen {
+  background: #0f1114;
+  overflow: hidden;
+}
+
+.settings-page {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-category {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 18px;
+}
+
+.settings-category-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6879e4;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  margin: 4px 4px 8px;
+}
+
+.settings-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  background: rgba(26, 29, 35, 0.5);
+  border-radius: 10px;
+  border: 1px solid #1f2229;
+}
+
+.settings-section-slider {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.settings-desc {
+  font-size: 12px;
+  color: #777;
+  line-height: 1.35;
+}
+
+.settings-slider-value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #6879e4;
+  background: rgba(104, 121, 228, 0.1);
+  padding: 2px 10px;
+  border-radius: 10px;
+  min-width: 36px;
+  text-align: center;
+}
+
+.settings-slider {
+  width: 100%;
+  accent-color: #6879e4;
+  height: 4px;
+}
+
+/* iOS-style toggle */
+.settings-toggle {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.settings-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #3a3d45;
+  border-radius: 24px;
+  cursor: pointer;
+  transition: background 0.18s;
+}
+
+.settings-toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.18s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.settings-toggle input:checked + .settings-toggle-slider {
+  background: #6879e4;
+}
+
+.settings-toggle input:checked + .settings-toggle-slider::before {
+  transform: translateX(20px);
+}
+
+/* Stacked sections (header + child rows: Remote Control ID row). */
+.settings-section-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/* Remote Control ID readout row (under the toggle). */
+.settings-id-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(15, 17, 20, 0.6);
+  border-radius: 8px;
+  border: 1px solid #1f2229;
+}
+
+.settings-id-label {
+  font-size: 12px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.settings-id-value {
+  flex: 1;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  color: #6879e4;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-id-edit {
+  background: rgba(104, 121, 228, 0.15);
+  border: 1px solid rgba(104, 121, 228, 0.4);
+  color: #6879e4;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.settings-id-edit:hover {
+  background: rgba(104, 121, 228, 0.25);
+}
+
+.settings-id-edit:active {
+  transform: scale(0.97);
+}
+
+/* BT Remote — scrollable list of available BLE remotes / gamepads. */
+.settings-bt-remote-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;      /* ~4 rows of 36px + padding, scroll after */
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2d35 transparent;
+}
+
+.settings-bt-remote-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(15, 17, 20, 0.55);
+  border: 1px solid #1f2229;
+  border-radius: 8px;
+  color: #ccc;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.settings-bt-remote-row:hover {
+  background: rgba(104, 121, 228, 0.08);
+  border-color: rgba(104, 121, 228, 0.3);
+}
+
+.settings-bt-remote-row[data-active="true"] {
+  background: rgba(66, 207, 85, 0.12);
+  border-color: rgba(66, 207, 85, 0.45);
+  color: #e0e0e0;
+}
+
+.settings-bt-remote-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.settings-bt-remote-label {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-bt-remote-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #42CF55;
+}
+
+html[data-theme="light"] .settings-bt-remote-row {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: #d4d9e4;
+  color: #1a1d23;
+}
+
+html[data-theme="light"] .settings-bt-remote-row:hover {
+  background: rgba(74, 92, 207, 0.08);
+  border-color: rgba(74, 92, 207, 0.35);
+}
+
+html[data-theme="light"] .settings-bt-remote-row[data-active="true"] {
+  background: rgba(46, 160, 67, 0.12);
+  border-color: rgba(46, 160, 67, 0.5);
+}
+
+/* Settings modal (Change ID / Internet remote disclaimer). */
+.settings-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.settings-modal-card {
+  background: #1a1d23;
+  border: 1px solid #2a2d35;
+  border-radius: 12px;
+  padding: 20px 22px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.settings-modal-body {
+  font-size: 13px;
+  color: #aaa;
+  line-height: 1.5;
+}
+
+.settings-modal-input {
+  background: #0f1114;
+  border: 1px solid #2a2d35;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.settings-modal-input:focus {
+  border-color: #6879e4;
+}
+
+.settings-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.settings-modal-btn {
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s;
+}
+
+.settings-modal-btn-primary {
+  background: #6879e4;
+  color: #fff;
+}
+
+.settings-modal-btn-primary:hover {
+  background: #7588e9;
+}
+
+.settings-modal-btn-secondary {
+  background: transparent;
+  color: #aaa;
+  border-color: #2a2d35;
+}
+
+.settings-modal-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Light-theme overrides — mirror status/services page rules. */
+html[data-theme="light"] .settings-page {
+  color: #1a1d23;
+}
+
+html[data-theme="light"] .settings-section {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: #d4d9e4;
+}
+
+html[data-theme="light"] .settings-title {
+  color: #1a1d23;
+}
+
+html[data-theme="light"] .settings-desc {
+  color: #5a6170;
+}
+
+html[data-theme="light"] .settings-toggle-slider {
+  background: #c4cbd6;
+}
+
+html[data-theme="light"] .settings-id-row {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: #d4d9e4;
+}
+
+html[data-theme="light"] .settings-id-label {
+  color: #5a6170;
+}
+
+html[data-theme="light"] .settings-id-value {
+  color: #4a5ccf;
+}
+
+html[data-theme="light"] .settings-modal-card {
+  background: #ffffff;
+  border-color: #d4d9e4;
+}
+
+html[data-theme="light"] .settings-modal-title {
+  color: #1a1d23;
+}
+
+html[data-theme="light"] .settings-modal-body {
+  color: #5a6170;
+}
+
+html[data-theme="light"] .settings-modal-input {
+  background: #f3f5fa;
+  border-color: #c4cbd6;
+  color: #1a1d23;
+}
+
+html[data-theme="light"] .settings-modal-btn-secondary {
+  color: #5a6170;
+  border-color: #c4cbd6;
+}
+
+html[data-theme="light"] .settings-modal-btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 /* ── 3D LiDAR Mapping Page ── */
 .app-root.mapping-screen {
   background: #0f1114;
@@ -2596,7 +3164,8 @@ html[data-theme="light"] body {
 
 html[data-theme="light"] .app-root.hub-screen,
 html[data-theme="light"] .app-root.status-screen,
-html[data-theme="light"] .app-root.services-screen {
+html[data-theme="light"] .app-root.services-screen,
+html[data-theme="light"] .app-root.settings-screen {
   background: #eef1f7;
 }
 /* Landing + Connection keep their bg images in both themes — only swap
@@ -2683,7 +3252,8 @@ html[data-theme="light"] .nav-divider {
 html[data-theme="light"] .bt-status-icon > div,
 html[data-theme="light"] .theme-toggle-icon > div,
 html[data-theme="light"] .nav-bt-icon,
-html[data-theme="light"] .nav-theme-icon {
+html[data-theme="light"] .nav-theme-icon,
+html[data-theme="light"] .nav-circle-icon {
   background: rgba(255, 255, 255, 0.95) !important;
   border-color: #c4cbd6 !important;
   box-shadow: 0 2px 6px rgba(60, 75, 120, 0.15);

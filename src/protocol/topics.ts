@@ -12,6 +12,10 @@ export const RTC_TOPIC = {
   VIDEOHUB: 'rt/api/videohub/request',
   AUDIOHUB: 'rt/api/audiohub/request',
   FOURG_AGENT: 'rt/api/fourg_agent/request',
+  // Internet remote-connection permission. Get: api_id=1001, no params.
+  // Set: api_id=1002, params { enable_status: 2 (enabled) | 1 (disabled) }.
+  // Source: NetPermissionModel.kt / DogApiId.PERMISSION_NET_{GET,SET}.
+  PERMISSION_NET: 'rt/api/rm_con/request',
   WIRELESS_CONTROLLER: 'rt/wirelesscontroller',
   LIDAR_SWITCH: 'rt/utlidar/switch',
   LOW_CMD: 'rt/lowcmd',

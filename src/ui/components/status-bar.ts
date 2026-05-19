@@ -3,10 +3,6 @@ import { cloudApi } from '../../api/unitree-cloud';
 import type { ErrorStore } from '../../protocol/error-store';
 import { ErrorsBadge } from './errors-badge';
 
-const BT_SVG = (color: string) => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M6.5 6.5 17.5 17.5 12 23V1l5.5 5.5L6.5 17.5"/>
-</svg>`;
-
 const SUN_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFB74D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="12" cy="12" r="4"/>
   <line x1="12" y1="2" x2="12" y2="5"/>
@@ -23,6 +19,27 @@ const MOON_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" st
   <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>
 </svg>`;
 
+// Sliders icon — matches the hub Settings button so the same glyph
+// always means "open settings" across hub + control views.
+const SETTINGS_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b0b3bb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <line x1="4" y1="21" x2="4" y2="14"/>
+  <line x1="4" y1="10" x2="4" y2="3"/>
+  <line x1="12" y1="21" x2="12" y2="12"/>
+  <line x1="12" y1="8" x2="12" y2="3"/>
+  <line x1="20" y1="21" x2="20" y2="16"/>
+  <line x1="20" y1="12" x2="20" y2="3"/>
+  <line x1="1" y1="14" x2="7" y2="14"/>
+  <line x1="9" y1="8" x2="15" y2="8"/>
+  <line x1="17" y1="16" x2="23" y2="16"/>
+</svg>`;
+
+export interface NavBarOptions {
+  /** Click handler for the settings icon. When provided, the icon is
+   *  rendered as the rightmost item in the navbar (control view: opens
+   *  the settings drawer). When absent, the icon is hidden. */
+  onMenuClick?: () => void;
+}
+
 export class NavBar {
   private container: HTMLElement;
   private netTypeEl!: HTMLElement;
@@ -33,14 +50,21 @@ export class NavBar {
   private bodyTempLastValue: number | null = null;
   private tempPopover: HTMLElement | null = null;
   private wifiIconEl!: HTMLImageElement;
-  private btIconWrap!: HTMLElement;
   private themeIconWrap!: HTMLElement;
+  private menuIconWrap: HTMLButtonElement | null = null;
   private unsubTheme: () => void = () => {};
   private onBack: () => void;
   private errorsBadge: ErrorsBadge | null = null;
+  private options: NavBarOptions;
 
-  constructor(parent: HTMLElement, onBack: () => void, errorStore?: ErrorStore) {
+  constructor(
+    parent: HTMLElement,
+    onBack: () => void,
+    errorStore?: ErrorStore,
+    options: NavBarOptions = {},
+  ) {
     this.onBack = onBack;
+    this.options = options;
 
     this.container = document.createElement('div');
     this.container.className = 'nav-bar';
@@ -83,20 +107,31 @@ export class NavBar {
         <img class="wifi-icon" src="/sprites/icon_wifi.png" alt="WiFi" />
         <div class="nav-theme-icon" title="Toggle theme"
              style="cursor:pointer;display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:rgba(26,29,35,0.95);border:1.5px solid #3a3d45;margin-left:4px;transition:all 0.15s;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div>
-        <div class="nav-bt-icon" title="Bluetooth: not connected"
-             style="cursor:default;display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:rgba(26,29,35,0.95);border:1.5px solid #3a3d45;margin-left:4px;transition:background 0.15s,border-color 0.15s;box-shadow:0 2px 6px rgba(0,0,0,0.3);">${BT_SVG('#b0b3bb')}</div>
       </div>
     `;
+
+    // Append the settings icon at the end of the right cluster — its
+    // drawer hosts BT-remote/gamepad selection and the rest of the
+    // robot settings, replacing the old passive BT icon and the
+    // separate input-source picker.
+    const rightSlot = this.container.querySelector('.nav-bar-right')!;
+    if (this.options.onMenuClick) {
+      this.menuIconWrap = document.createElement('button');
+      this.menuIconWrap.type = 'button';
+      this.menuIconWrap.className = 'nav-menu-icon nav-circle-icon';
+      this.menuIconWrap.title = 'Open settings';
+      this.menuIconWrap.setAttribute('aria-label', 'Open settings');
+      this.menuIconWrap.innerHTML = SETTINGS_SVG;
+      this.menuIconWrap.addEventListener('click', () => this.options.onMenuClick?.());
+      rightSlot.appendChild(this.menuIconWrap);
+    }
 
     this.batteryFill = this.container.querySelector('.battery-fill')!;
     this.batteryText = this.container.querySelector('.battery-text')!;
     this.motorTempEl = this.container.querySelector('.motor-temp-label')!;
     this.netTypeEl = this.container.querySelector('.net-type-label')!;
     this.wifiIconEl = this.container.querySelector('.wifi-icon')!;
-    this.btIconWrap = this.container.querySelector('.nav-bt-icon')!;
     this.themeIconWrap = this.container.querySelector('.nav-theme-icon')!;
-
-    // BT icon is passive — no hover/click handlers. Status comes from setBluetoothStatus().
 
     // Theme toggle
     this.themeIconWrap.addEventListener('click', () => theme().toggle());
@@ -206,14 +241,5 @@ export class NavBar {
     else if (upper === 'STA-T' || upper === 'REMOTE') src = '/sprites/icon_net_remote.png';
     else if (upper === 'STA-L') src = '/sprites/icon_net_sta.png';
     if (this.wifiIconEl.getAttribute('src') !== src) this.wifiIconEl.src = src;
-  }
-
-  setBluetoothStatus(connected: boolean, tooltip: string): void {
-    const color = connected ? '#4fc3f7' : '#b0b3bb';
-    this.btIconWrap.innerHTML = BT_SVG(color);
-    this.btIconWrap.title = tooltip;
-    this.btIconWrap.dataset.connected = connected ? 'true' : 'false';
-    this.btIconWrap.style.borderColor = connected ? 'rgba(79,195,247,0.5)' : '#3a3d45';
-    this.btIconWrap.style.background = connected ? 'rgba(79,195,247,0.15)' : 'rgba(26,29,35,0.95)';
   }
 }

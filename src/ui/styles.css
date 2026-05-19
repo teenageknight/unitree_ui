@@ -908,11 +908,10 @@ html[data-theme="light"] .settings-drawer-close:hover {
 
 
 /* ── Emergency Stop (APK: swipe-left to activate) ──
-   Sits below the setting bar AND clears the input-source picker popup
-   (which hangs from the setting bar and is capped at ~2 rows tall). */
+   Sits just under the top NavBar (60px tall + small gap). */
 .emergency-stop {
   position: absolute;
-  top: 240px;
+  top: 72px;
   right: 0;
   height: 28px;
   background-color: #ff4848;

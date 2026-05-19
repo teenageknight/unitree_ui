@@ -917,7 +917,6 @@ html[data-theme="light"] .settings-drawer-close:hover {
   background-color: #ff4848;
   border-radius: 28px 0 0 28px;
   padding-left: 10px;
-  padding-right: 15px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -929,6 +928,8 @@ html[data-theme="light"] .settings-drawer-close:hover {
   z-index: 20;
   overflow: hidden;
   box-shadow: 0 0 0 #ff4848;
+  /* width is driven by JS (REST_WIDTH ↔ FULL_WIDTH) to enable the
+     APK drag-to-stretch animation. */
 }
 
 .emergency-stop.animation {
@@ -957,6 +958,31 @@ html[data-theme="light"] .settings-drawer-close:hover {
   opacity: 0;
   left: -10px;
   cursor: grab;
+}
+
+/* Banner that appears under the e-stop when the user tries to drive
+   while the stop is engaged. Throttled in JS so it never spams. */
+.estop-blocked-toast {
+  position: absolute;
+  top: 110px;            /* just below the e-stop (top:72 + 28 + 10) */
+  right: 12px;
+  max-width: 320px;
+  padding: 8px 14px;
+  background: rgba(255, 72, 72, 0.95);
+  color: #fff;
+  font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  z-index: 25;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s;
+}
+
+.estop-blocked-toast.show {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 @keyframes stopFlash {

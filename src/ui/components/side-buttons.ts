@@ -427,19 +427,37 @@ export class SettingBar {
   }
 }
 
-/** APK-matching emergency stop: swipe the whole button left to activate. */
+/** APK-matching emergency stop. The button grows leftward as the user
+ *  drags left; on release it snaps (with a 300 ms tween) to either the
+ *  resting 65 px width or the full 190 px width depending on drag
+ *  distance, and toggles the emergency-stop state at the threshold.
+ *
+ *  Cross-checked against decompiled `main-h84O7oJU.js` (Vue component
+ *  data-v-2551f7f0) — same bounds, same tween length, same activate /
+ *  cancel thresholds. */
 export class EmergencyStop {
+  private static REST_WIDTH = 65;
+  private static FULL_WIDTH = 190;
+  private static SWIPE_THRESHOLD = 30;
+  private static TWEEN_MS = 300;
+
   private container: HTMLElement;
   private arrowEl: HTMLElement;
+  private dragArea: HTMLElement;
   private activated = false;
-  private startX = 0;
   private animating = false;
+  private startX = 0;
+  /** Pixels currently rendered (live during drag, snaps on release). */
+  private currentWidth: number = EmergencyStop.REST_WIDTH;
+  /** Width to snap back to after a partial drag (REST_WIDTH or FULL_WIDTH). */
+  private restWidth: number = EmergencyStop.REST_WIDTH;
+  private animFrame: number | null = null;
 
   constructor(parent: HTMLElement, private onStop: (active: boolean) => void) {
     this.container = document.createElement('div');
     this.container.className = 'emergency-stop';
+    this.container.style.width = `${EmergencyStop.REST_WIDTH}px`;
 
-    // Left-pointing double arrow
     this.arrowEl = document.createElement('span');
     this.arrowEl.className = 'estop-arrow';
     this.arrowEl.innerHTML = '&#x00AB;'; // « double left arrow
@@ -451,47 +469,109 @@ export class EmergencyStop {
     this.container.appendChild(this.arrowEl);
     this.container.appendChild(label);
 
-    // Invisible drag overlay (APK: operation_bar 120% width, 180% height)
-    const dragArea = document.createElement('div');
-    dragArea.className = 'estop-drag-area';
-    this.container.appendChild(dragArea);
+    // Invisible drag overlay (APK: operation_bar 120% width, 180% height).
+    this.dragArea = document.createElement('div');
+    this.dragArea.className = 'estop-drag-area';
+    this.container.appendChild(this.dragArea);
 
-    dragArea.addEventListener('pointerdown', (e) => this.onPointerDown(e, dragArea));
-    dragArea.addEventListener('pointermove', (e) => this.onPointerMove(e, dragArea));
-    dragArea.addEventListener('pointerup', (e) => this.onPointerUp(e, dragArea));
-    dragArea.addEventListener('pointercancel', (e) => this.onPointerUp(e, dragArea));
+    this.dragArea.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    this.dragArea.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    this.dragArea.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    this.dragArea.addEventListener('pointercancel', (e) => this.onPointerUp(e));
 
     parent.appendChild(this.container);
   }
 
-  private onPointerDown(e: PointerEvent, area: HTMLElement): void {
+  private onPointerDown(e: PointerEvent): void {
     if (this.animating) return;
     this.startX = e.clientX;
-    area.setPointerCapture(e.pointerId);
+    this.dragArea.setPointerCapture(e.pointerId);
   }
 
-  private onPointerMove(e: PointerEvent, area: HTMLElement): void {
-    if (this.animating || !area.hasPointerCapture(e.pointerId)) return;
-    // No visual movement — APK doesn't move the button visually during drag
+  private onPointerMove(e: PointerEvent): void {
+    if (this.animating || !this.dragArea.hasPointerCapture(e.pointerId)) return;
+    // Left drag (dx < 0) grows the width, right drag shrinks it. The
+    // right edge stays anchored — only the left edge moves.
+    const dx = e.clientX - this.startX;
+    this.setWidth(EmergencyStop.clamp(this.restWidth - dx));
   }
 
-  private onPointerUp(e: PointerEvent, area: HTMLElement): void {
+  private onPointerUp(e: PointerEvent): void {
     if (this.animating) return;
-    area.releasePointerCapture(e.pointerId);
-    const dragDist = this.startX - e.clientX; // positive = dragged left
+    this.dragArea.releasePointerCapture(e.pointerId);
+    const { REST_WIDTH, FULL_WIDTH, SWIPE_THRESHOLD } = EmergencyStop;
+    const dx = e.clientX - this.startX; // positive = dragged right
+    this.setWidth(EmergencyStop.clamp(this.currentWidth));
 
-    if (!this.activated && dragDist > 30) {
-      // Swipe left → activate
-      this.activated = true;
-      this.container.classList.add('animation');
-      this.arrowEl.classList.add('active');
-      this.onStop(true);
-    } else if (this.activated && dragDist < -30) {
-      // Swipe right → deactivate
-      this.activated = false;
-      this.container.classList.remove('animation');
-      this.arrowEl.classList.remove('active');
-      this.onStop(false);
+    if (dx < -SWIPE_THRESHOLD) {
+      // Past the activation threshold — go full and flip on.
+      if (this.currentWidth < FULL_WIDTH) {
+        this.tween(this.currentWidth, FULL_WIDTH, () => {
+          this.restWidth = FULL_WIDTH;
+          this.setActivated(true);
+        });
+      } else {
+        this.setActivated(true);
+      }
+    } else if (dx < 0) {
+      // Pulled left but not far enough — snap back to rest (REST_WIDTH).
+      if (this.currentWidth >= FULL_WIDTH) return;
+      this.tween(this.currentWidth, REST_WIDTH, () => {
+        this.restWidth = REST_WIDTH;
+      });
+    } else if (dx > SWIPE_THRESHOLD) {
+      // Past the cancel threshold — shrink to rest and flip off.
+      if (this.currentWidth > REST_WIDTH) {
+        this.tween(this.currentWidth, REST_WIDTH, () => {
+          this.restWidth = REST_WIDTH;
+          this.setActivated(false);
+        });
+      } else {
+        this.setActivated(false);
+      }
+    } else if (dx > 0) {
+      // Pulled right but not far enough — snap back to full (FULL_WIDTH).
+      if (this.currentWidth <= REST_WIDTH) return;
+      this.tween(this.currentWidth, FULL_WIDTH, () => {
+        this.restWidth = FULL_WIDTH;
+      });
     }
+  }
+
+  private setWidth(w: number): void {
+    this.currentWidth = w;
+    this.container.style.width = `${w}px`;
+  }
+
+  private tween(from: number, to: number, onComplete: () => void): void {
+    if (this.animFrame !== null) cancelAnimationFrame(this.animFrame);
+    this.animating = true;
+    const start = performance.now();
+    const step = (now: number): void => {
+      const t = Math.min(1, (now - start) / EmergencyStop.TWEEN_MS);
+      this.setWidth(from + (to - from) * t);
+      if (t < 1) {
+        this.animFrame = requestAnimationFrame(step);
+      } else {
+        this.animFrame = null;
+        this.animating = false;
+        onComplete();
+      }
+    };
+    this.animFrame = requestAnimationFrame(step);
+  }
+
+  private setActivated(on: boolean): void {
+    if (this.activated === on) return;
+    this.activated = on;
+    this.container.classList.toggle('animation', on);
+    this.arrowEl.classList.toggle('active', on);
+    this.onStop(on);
+  }
+
+  private static clamp(w: number): number {
+    if (w < EmergencyStop.REST_WIDTH) return EmergencyStop.REST_WIDTH;
+    if (w > EmergencyStop.FULL_WIDTH) return EmergencyStop.FULL_WIDTH;
+    return w;
   }
 }

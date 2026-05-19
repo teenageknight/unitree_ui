@@ -484,6 +484,7 @@ export class App {
     const w2 = document.createElement('div');
     w2.className = 'wrapper-2';
     this.actionBar = new ActionBar(w2, (action) => {
+      if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
       // G1 modes + arm gestures all route through G1_ARM_REQUEST (the
       // humanoid uses 'rt/api/arm/request' instead of 'rt/api/sport/request').
       // Go2 keeps SPORT_MOD as before. Verified against Explorer 1.9.3.
@@ -724,6 +725,8 @@ export class App {
     this.actionBar = null;
     this.settingsDrawer?.destroy();
     this.settingsDrawer = null;
+    this.clearEstopToast();
+    this.emergencyStopped = false;
     this.scene3d?.destroy();
     this.scene3d = null;
     this.statusPage = null;
@@ -873,18 +876,20 @@ export class App {
       // Gamepad active → publish its state on the same 20 Hz cadence.
       if (this.activeSourceId?.startsWith('gamepad:') && this.gamepadManager?.currentState) {
         const { lx, ly, rx, ry, keys } = this.gamepadManager.currentState;
-        if (lx !== 0 || ly !== 0 || rx !== 0 || ry !== 0 || keys !== 0) {
-          this.dataHandler?.publish(RTC_TOPIC.WIRELESS_CONTROLLER, { lx, ly, rx, ry, keys });
-        }
+        const inUse = lx !== 0 || ly !== 0 || rx !== 0 || ry !== 0 || keys !== 0;
+        if (!inUse) return;
+        if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
+        this.dataHandler?.publish(RTC_TOPIC.WIRELESS_CONTROLLER, { lx, ly, rx, ry, keys });
         return;
       }
       // BT relay subscribes to remote_state and publishes itself, so skip.
       if (this.activeSourceId?.startsWith('bt:')) return;
       // Default: on-screen joysticks.
       const { lx, ly, rx, ry } = this.joystickState;
-      if (lx !== 0 || ly !== 0 || rx !== 0 || ry !== 0) {
-        this.dataHandler?.publish(RTC_TOPIC.WIRELESS_CONTROLLER, { lx, ly, rx, ry });
-      }
+      const inUse = lx !== 0 || ly !== 0 || rx !== 0 || ry !== 0;
+      if (!inUse) return;
+      if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
+      this.dataHandler?.publish(RTC_TOPIC.WIRELESS_CONTROLLER, { lx, ly, rx, ry });
     }, 50);
   }
 
@@ -963,6 +968,9 @@ export class App {
           for (let i = 0; i < order.length; i++) {
             if (s.buttons[order[i]]) keys |= (1 << i);
           }
+          const inUse = s.lx !== 0 || s.ly !== 0 || s.rx !== 0 || s.ry !== 0 || keys !== 0;
+          if (!inUse) return;
+          if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
           this.dataHandler.publish(RTC_TOPIC.WIRELESS_CONTROLLER, {
             lx: s.lx, ly: s.ly, rx: s.rx, ry: s.ry, keys,
           });
@@ -1776,12 +1784,62 @@ export class App {
   // ── Robot Commands ──
 
   private sendStop(active: boolean): void {
+    this.emergencyStopped = active;
     if (active) {
       this.dataHandler?.publishRequest(RTC_TOPIC.SPORT_MOD, SPORT_CMD.StopMove);
       setTimeout(() => {
         this.dataHandler?.publishRequest(RTC_TOPIC.SPORT_MOD, SPORT_CMD.Damp);
       }, 300);
     }
+  }
+
+  // ── Emergency-stop lockout ──
+  //
+  // While the e-stop is engaged the APK rejects joystick + action-bar
+  // commands and surfaces a throttled toast (`ToastMsg("toastMsg_2")`)
+  // — see `main-h84O7oJU.js` useOperaBarHook + useRTC handler. We do
+  // the same: every guarded callsite calls `notifyEstopBlocked()` and
+  // the throttle ensures the message never flashes more than once per
+  // second even if the user keeps jiggling the joystick.
+  private emergencyStopped = false;
+  private estopToastEl: HTMLElement | null = null;
+  private estopToastTimer: ReturnType<typeof setTimeout> | null = null;
+  private estopToastLastShownAt = 0;
+
+  /** True when the e-stop is engaged. Joystick + sport-action paths
+   *  check this and bail with a toast rather than publishing. */
+  private isEmergencyStopped(): boolean {
+    return this.emergencyStopped;
+  }
+
+  /** Throttled "release the emergency stop first" toast — shows at most
+   *  once per second, auto-dismisses after ~2.5 s. Mounts onto the
+   *  control overlay so it sits below the navbar's e-stop button. */
+  private notifyEstopBlocked(): void {
+    const now = performance.now();
+    if (now - this.estopToastLastShownAt < 1000) return;
+    this.estopToastLastShownAt = now;
+
+    if (this.estopToastTimer) clearTimeout(this.estopToastTimer);
+    if (!this.estopToastEl) {
+      this.estopToastEl = document.createElement('div');
+      this.estopToastEl.className = 'estop-blocked-toast';
+      this.estopToastEl.textContent = 'Emergency stop engaged — swipe the red bar right to release.';
+      (this.controlUi ?? document.body).appendChild(this.estopToastEl);
+    }
+    this.estopToastEl.classList.add('show');
+    this.estopToastTimer = setTimeout(() => {
+      this.estopToastEl?.classList.remove('show');
+    }, 2500);
+  }
+
+  private clearEstopToast(): void {
+    if (this.estopToastTimer) {
+      clearTimeout(this.estopToastTimer);
+      this.estopToastTimer = null;
+    }
+    this.estopToastEl?.remove();
+    this.estopToastEl = null;
   }
 
   private sendRadarToggle(enabled: boolean): void {
@@ -1855,6 +1913,8 @@ export class App {
     this.actionBar = null;
     this.settingsDrawer?.destroy();
     this.settingsDrawer = null;
+    this.clearEstopToast();
+    this.emergencyStopped = false;
     this.statusPage = null;
     this.servicesPage = null;
     this.settingsPage = null;

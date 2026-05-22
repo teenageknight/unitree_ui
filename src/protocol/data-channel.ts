@@ -117,17 +117,26 @@ export class DataChannelHandler {
 
   /** Send a request matching the SDK format: header + parameter (JSON string) + binary.
    *  Returns the generated `id` so the caller can correlate the response
-   *  (the robot echoes it back in `header.identity.id`). */
-  publishRequest(topic: string, apiId: number, parameter: string = '{}'): number {
+   *  (the robot echoes it back in `header.identity.id`).
+   *
+   *  `priority: 1` is used by emergency-stop / damping to jump the queue;
+   *  the policy object is only attached when priority is requested. */
+  publishRequest(
+    topic: string,
+    apiId: number,
+    parameter: string = '{}',
+    options: { priority?: boolean } = {},
+  ): number {
     const id = Math.floor(Math.random() * 2147483647);
+    const header: { identity: { id: number; api_id: number }; policy?: { priority: number } } = {
+      identity: { id, api_id: apiId },
+    };
+    if (options.priority) header.policy = { priority: 1 };
     this.webrtc.send({
       type: DATA_CHANNEL_TYPE.REQUEST,
       topic,
       data: {
-        header: {
-          identity: { id, api_id: apiId },
-          policy: { priority: 0, noreply: false },
-        },
+        header,
         parameter,
         binary: [],
       },

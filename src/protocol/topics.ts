@@ -34,12 +34,15 @@ export const RTC_TOPIC = {
   PUBLIC_NETWORK_STATUS: 'rt/public_network_status',
 
   // G1-specific (firmware 1.5.1+) — humanoid topics.
-  // Modes + arm gestures all go through G1_ARM_REQUEST (no SPORT_MOD on G1).
+  // Request routing on G1:
+  //   - Full-body modes (ZeroTorque, Preparation, Walk, ...) → SPORT_MOD,
+  //     api_id=7101 (G1State), param={"data":<mode_index>}.
+  //   - Upper-limb gestures (Handshake, Hug, ...)            → G1_ARM_REQUEST,
+  //     api_id=7106 (G1UpperLimbs), param={"data":<gesture_index>}.
   // BMS_STATE carries battery (G1 doesn't ship the bms struct inside
   // rt/lf/lowstate the way Go2 does). DOUBLE_IMU carries both
   // imu_in_torso ("Body IMU") and imu_in_pelvis ("Crotch IMU") in one
-  // frame. Cross-checked against the Unitree Explorer 1.9.3 bundle —
-  // index-CtgArt9k.js routes on `["G1","R1"].includes(series)`.
+  // frame.
   G1_ARM_REQUEST: 'rt/api/arm/request',
   G1_ARM_ACTION_STATE: 'rt/arm/action/state',
   G1_DEX3_LEFT_STATE: 'rt/lf/dex3/left/state',

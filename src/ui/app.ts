@@ -3,7 +3,7 @@ import { ConnectionPanel } from './connection-panel';
 import { Joystick } from './components/joystick';
 import { GamepadManager } from './components/gamepad-manager';
 import { NavBar } from './components/status-bar';
-import { ActionBar } from './components/action-bar';
+import { ActionBar, g1ModeToState } from './components/action-bar';
 import { PipCamera } from './components/pip-camera';
 import { EmergencyStop, type InputSource } from './components/side-buttons';
 import { SettingsDrawer } from './components/settings-drawer';
@@ -32,6 +32,27 @@ import type { WebRTCConnection } from '../connection/webrtc';
 import type { Scene3D } from './scene/scene';
 
 type Screen = 'landing' | 'connection' | 'hub' | 'control' | 'status' | 'services' | 'settings' | 'mapping' | 'account' | 'bt' | 'errors';
+
+/** Translate raw connector errors into user-facing messages. The G1
+ *  RockChip accepts a single WebRTC client at a time — 429 on con_ing
+ *  almost always means the Unitree app or a previous browser tab is
+ *  still holding the session. 504 fires while the FSM is mid-transition.
+ *  Anything else is passed through verbatim. */
+function friendlyConnectError(raw: string): string {
+  if (/HTTP 429/.test(raw)) {
+    return 'Robot busy: another WebRTC client is already connected. Close the Unitree app (or any other tab connected to this robot), wait ~5 seconds, then retry.';
+  }
+  if (/HTTP 504/.test(raw)) {
+    return 'Robot is mid-transition (504 from RockChip). Wait a few seconds for the FSM to settle, then retry.';
+  }
+  if (/HTTP 403/.test(raw)) {
+    return 'Robot refused the connection (403). Check the serial number and AES key.';
+  }
+  if (/Device rejected/i.test(raw)) {
+    return 'Robot rejected the connection — another client may be connected.';
+  }
+  return raw;
+}
 
 export class App {
   private root: HTMLElement;
@@ -86,6 +107,13 @@ export class App {
   // Joystick state
   private joystickState = { lx: 0, ly: 0, rx: 0, ry: 0 };
   private joystickTimer: ReturnType<typeof setInterval> | null = null;
+  /** Number of zero-publish ticks remaining after a joystick release.
+   *  We need to publish one final zero (or a few, in case the data
+   *  channel drops one) so the robot cancels its last velocity command.
+   *  Without this, idle-publish suppression strands the robot on the
+   *  last non-zero command and it keeps walking. */
+  private joystickReleaseTicks = 0;
+  private static readonly JOYSTICK_RELEASE_TICKS = 4;
 
   // Robot fault tracking — single store, lives across reconnects; cleared on disconnect.
   private errorStore = new ErrorStore();
@@ -485,10 +513,10 @@ export class App {
     w2.className = 'wrapper-2';
     this.actionBar = new ActionBar(w2, (action) => {
       if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
-      // G1 modes + arm gestures all route through G1_ARM_REQUEST (the
-      // humanoid uses 'rt/api/arm/request' instead of 'rt/api/sport/request').
-      // Go2 keeps SPORT_MOD as before. Verified against Explorer 1.9.3.
-      const topic = cloudApi.connectFamily === 'G1' ? RTC_TOPIC.G1_ARM_REQUEST : RTC_TOPIC.SPORT_MOD;
+      // Routing is per-row: G1 modes carry topic=SPORT_MOD with api_id=7101,
+      // G1 upper-limb gestures carry topic=G1_ARM_REQUEST with api_id=7106,
+      // Go2 rows have no topic and fall back to SPORT_MOD.
+      const topic = action.topic ?? RTC_TOPIC.SPORT_MOD;
       console.log(`[action] REQ → ${action.name} (topic=${topic} api_id=${action.apiId}, param=${action.param ?? '{}'})`);
       this.dataHandler?.publishRequest(topic, action.apiId, action.param);
     });
@@ -877,8 +905,14 @@ export class App {
       if (this.activeSourceId?.startsWith('gamepad:') && this.gamepadManager?.currentState) {
         const { lx, ly, rx, ry, keys } = this.gamepadManager.currentState;
         const inUse = lx !== 0 || ly !== 0 || rx !== 0 || ry !== 0 || keys !== 0;
-        if (!inUse) return;
-        if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
+        if (inUse) {
+          this.joystickReleaseTicks = App.JOYSTICK_RELEASE_TICKS;
+        } else if (this.joystickReleaseTicks <= 0) {
+          return;
+        } else {
+          this.joystickReleaseTicks--;
+        }
+        if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); this.joystickReleaseTicks = 0; return; }
         this.dataHandler?.publish(RTC_TOPIC.WIRELESS_CONTROLLER, { lx, ly, rx, ry, keys });
         return;
       }
@@ -887,8 +921,14 @@ export class App {
       // Default: on-screen joysticks.
       const { lx, ly, rx, ry } = this.joystickState;
       const inUse = lx !== 0 || ly !== 0 || rx !== 0 || ry !== 0;
-      if (!inUse) return;
-      if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); return; }
+      if (inUse) {
+        this.joystickReleaseTicks = App.JOYSTICK_RELEASE_TICKS;
+      } else if (this.joystickReleaseTicks <= 0) {
+        return;
+      } else {
+        this.joystickReleaseTicks--;
+      }
+      if (this.isEmergencyStopped()) { this.notifyEstopBlocked(); this.joystickReleaseTicks = 0; return; }
       this.dataHandler?.publish(RTC_TOPIC.WIRELESS_CONTROLLER, { lx, ly, rx, ry });
     }, 50);
   }
@@ -1094,15 +1134,26 @@ export class App {
       if (msg.topic === 'rt/api/bashrunner/response') { this.handleBashrunnerResponse(msg.data); return; }
       if (msg.topic === 'rt/api/motion_switcher/response') { this.handleMotionSwitcherResponse(msg.data); return; }
       if (msg.topic === 'rt/api/robot_state/response') { this.handleRobotStateResponse(msg.data); return; }
-      if (msg.topic === 'rt/api/sport/response') {
-        // Sport responses carry the echo of action-bar requests. Logging
-        // is left to the failure path: only surface errors so the
-        // console stays quiet for the happy path.
+      if (
+        msg.topic === 'rt/api/sport/response' ||
+        msg.topic === 'rt/api/arm/response' ||
+        msg.topic === 'rt/api/loco/response'
+      ) {
+        // Echo of action-bar / locomotion requests. Log every response so
+        // the user can confirm requests are landing — success at info,
+        // failure at warn. Common G1 error codes: 7303 = wrong service,
+        // 3203 = api not implemented, 7404 = FSM_UNAVAILABLE, 7403 =
+        // private endpoint.
         const d = msg.data as { header?: { identity?: { api_id?: number }; status?: { code?: number } }; data?: unknown };
         const code = d?.header?.status?.code;
-        if (code !== 0) {
-          const apiId = d?.header?.identity?.api_id;
-          console.warn(`[go2:action] ERR ← api_id=${apiId} code=${code}${d?.data !== undefined ? ' data=' + JSON.stringify(d.data) : ''}`);
+        const apiId = d?.header?.identity?.api_id;
+        const tag = msg.topic === 'rt/api/arm/response' ? 'g1:arm' :
+                    msg.topic === 'rt/api/loco/response' ? 'g1:loco' : 'sport';
+        const payload = d?.data !== undefined ? ` data=${JSON.stringify(d.data)}` : '';
+        if (code === 0) {
+          console.log(`[${tag}] OK  ← api_id=${apiId} code=0${payload}`);
+        } else {
+          console.warn(`[${tag}] ERR ← api_id=${apiId} code=${code}${payload}`);
         }
         return;
       }
@@ -1321,13 +1372,27 @@ export class App {
       velocity?: number[];
       imu_state?: { quaternion?: number[] };
       mode?: number;
+      fsm_id?: number;
       gait_type?: number;
     };
 
+    // G1 publishes the current locomotion state in `fsm_id` rather than
+    // `mode`. Without this fallback the OperaBar would never learn the
+    // robot's current state on connect — the user already in Walk2
+    // would still see all gestures greyed.
+    const currentMode = d.mode ?? d.fsm_id;
+
     if (d.position) this.robotState.position = d.position;
     if (d.velocity) this.robotState.velocity = d.velocity;
-    if (d.mode !== undefined) this.robotState.mode = d.mode;
+    if (currentMode !== undefined) this.robotState.mode = currentMode;
     if (d.gait_type !== undefined) this.robotState.gaitType = d.gait_type;
+
+    // G1 only: feed sportState into the action bar so it can grey out
+    // transitions the FSM would reject (Zero Torque / Preparation /
+    // Squat-Up / Lie Up need current state = Damp).
+    if (cloudApi.connectFamily === 'G1' && currentMode !== undefined) {
+      this.actionBar?.setG1State(g1ModeToState(currentMode));
+    }
 
     if (this.scene3d && d.position && d.imu_state?.quaternion) {
       const [px, py, pz] = d.position;
@@ -1748,8 +1813,8 @@ export class App {
       // the onValidated callback runs. Don't wait for validation here.
       this.dataHandler.onErrorMessage = (type, data) => this.errorStore.applyWireMessage(type, data);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Connection failed';
-      this.connectionPanel?.setStatus(message, 'error');
+      const raw = err instanceof Error ? err.message : 'Connection failed';
+      this.connectionPanel?.setStatus(friendlyConnectError(raw), 'error');
       this.connectionPanel?.setConnecting(false);
       this.webrtc?.close();
       this.webrtc = null;
@@ -1766,17 +1831,30 @@ export class App {
         this.connectionPanel?.setStatus('Connected, awaiting validation...', 'info');
         break;
       case 'disconnected':
-        if (this.currentScreen !== 'connection') {
+        if (this.currentScreen === 'connection') {
+          // Failure during the initial handshake (e.g. 429 from con_ing,
+          // peer reject). The catch block in connect() owns the error
+          // message and webrtc cleanup; just reset the button state and
+          // let the user see the panel error / retry. Calling disconnect()
+          // here would wipe the panel and dump them to the landing screen
+          // before the error message ever rendered.
+          this.connectionPanel?.setConnecting(false);
+        } else {
           // Lost connection while in hub/control/status — show message and go back
           this.disconnect();
           this.connectionPanel?.setStatus('Connection lost — robot disconnected', 'error');
-        } else {
-          this.disconnect();
         }
         break;
       case 'failed':
-        this.disconnect();
-        this.connectionPanel?.setStatus('WebRTC connection failed — check network', 'error');
+        if (this.currentScreen === 'connection') {
+          this.connectionPanel?.setStatus('WebRTC connection failed — check network', 'error');
+          this.connectionPanel?.setConnecting(false);
+          this.webrtc?.close();
+          this.webrtc = null;
+        } else {
+          this.disconnect();
+          this.connectionPanel?.setStatus('WebRTC connection failed — check network', 'error');
+        }
         break;
     }
   }
@@ -1785,11 +1863,27 @@ export class App {
 
   private sendStop(active: boolean): void {
     this.emergencyStopped = active;
-    if (active) {
-      this.dataHandler?.publishRequest(RTC_TOPIC.SPORT_MOD, SPORT_CMD.StopMove);
-      setTimeout(() => {
-        this.dataHandler?.publishRequest(RTC_TOPIC.SPORT_MOD, SPORT_CMD.Damp);
-      }, 300);
+    if (!active) return;
+    // E-stop sends a priority Damp request. For G1/R1 the damp command
+    // is encoded as api_id=7101 (G1State) with parameter {"data":1};
+    // for Go2 it's the plain api_id=1001 (Damp). Both go to SPORT_MOD
+    // with header.policy.priority=1 so the FSM bypasses the current
+    // command queue. The old code sent Go2's StopMove + Damp on every
+    // family, which G1 silently rejects with code 7404.
+    if (cloudApi.connectFamily === 'G1') {
+      this.dataHandler?.publishRequest(
+        RTC_TOPIC.SPORT_MOD,
+        7101,
+        '{"data":1}',
+        { priority: true },
+      );
+    } else {
+      this.dataHandler?.publishRequest(
+        RTC_TOPIC.SPORT_MOD,
+        SPORT_CMD.Damp,
+        '{}',
+        { priority: true },
+      );
     }
   }
 

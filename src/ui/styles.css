@@ -1083,6 +1083,47 @@ html[data-theme="light"] .settings-drawer-close:hover {
   opacity: 1;
 }
 
+/* Greyed out when the FSM won't accept this transition from current state.
+   Applied by ActionBar based on G1 sportState. */
+.action-island-item.action-disabled,
+.action-popup-item.action-disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Highlight the row whose g1Key matches the current sport state — the
+   blue active-state indicator. The icon is recoloured via a CSS mask:
+   each icon wrap exposes its SVG URL through the --icon custom
+   property, and the ::after pseudo paints the blue shape on top while
+   the original white <img> is hidden. */
+.action-island-item.action-current > span,
+.action-popup-item.action-current .action-popup-label {
+  color: #95A2F3;
+}
+.action-island-item.action-current,
+.action-popup-item.action-current {
+  opacity: 1;
+}
+
+.action-island-item.action-current .action-icon-wrap,
+.action-popup-item.action-current .action-popup-icon {
+  position: relative;
+}
+.action-island-item.action-current .action-icon-wrap img,
+.action-popup-item.action-current .action-popup-icon img {
+  visibility: hidden;
+}
+.action-island-item.action-current .action-icon-wrap::after,
+.action-popup-item.action-current .action-popup-icon::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: #95A2F3;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+          mask: var(--icon) center / contain no-repeat;
+}
+
 .action-icon-wrap {
   width: 34px;
   height: 34px;

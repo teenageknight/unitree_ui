@@ -1,5 +1,51 @@
-import { SPORT_CMD } from '../../protocol/topics';
+import { RTC_TOPIC, SPORT_CMD } from '../../protocol/topics';
 import { cloudApi, type RobotFamily } from '../../api/unitree-cloud';
+
+/** G1 sport-state values — the canonical string names the on-robot
+ *  state machine uses. The gating rules below compare against these
+ *  exact strings when deciding which rows to disable. */
+export const G1_STATE = {
+  Idle:        'idle',
+  ZeroTorque:  'zeroTorque',
+  Damp:        'damping',
+  Squat:       'squat',
+  Seating:     'seating',
+  Preparation: 'preparation',
+  Walk:        'walk_g1',
+  Walk2:       'walk2_g1',
+  Run:         'run_g1',
+  Step:        'step',
+  Stand:       'stand',
+  Dance:       'dance_g1',
+  Climb:       'climb',
+  Combat:      'combat',
+  SquatUp:     'squatUp',
+  LieUp:       'lieUp',
+} as const;
+export type G1State = (typeof G1_STATE)[keyof typeof G1_STATE];
+
+/** Map the numeric mode published in LF_SPORT_MOD_STATE to a G1State
+ *  name. Falls back to ZeroTorque when mode is null/NaN — that's the
+ *  state the robot defaults to before the first sport-mode-state
+ *  message arrives. */
+export function g1ModeToState(mode: number | undefined): G1State {
+  if (mode === undefined || Number.isNaN(mode)) return G1_STATE.ZeroTorque;
+  switch (mode) {
+    case 0:   return G1_STATE.ZeroTorque;
+    case 1:   return G1_STATE.Damp;
+    case 2:   return G1_STATE.Squat;
+    case 3:   return G1_STATE.Seating;
+    case 4:   return G1_STATE.Preparation;
+    case 500: return G1_STATE.Walk;
+    case 501: return G1_STATE.Walk2;
+    case 503: return G1_STATE.Dance;
+    case 706: return G1_STATE.Squat;
+    case 801:
+    case 802: return G1_STATE.Run;
+    case 812: return G1_STATE.Climb;
+    default:  return G1_STATE.Idle;
+  }
+}
 
 export interface RobotAction {
   apiId: number;
@@ -7,17 +53,29 @@ export interface RobotAction {
   icon: string;
   /** JSON parameter string sent with the request. Defaults to '{}'. */
   param?: string;
+  /** Optional override of the publish topic. Defaults to SPORT_MOD for Go2. */
+  topic?: string;
   /** Which robot families support this action. Defaults to ['Go2'] when omitted. */
   families?: ReadonlyArray<RobotFamily>;
+  /** G1 only: protocol key (state name for modes, gesture name like
+   *  'shakeHands_1' for arm actions). The gating rules below are keyed
+   *  on these strings — keep them stable. */
+  g1Key?: string;
 }
 
 const DATA_TRUE = '{"data":true}';
 
-// Family tagging policy: each list below is single-family. Go2 actions
-// fire against rt/api/sport/request with SPORT_CMD api_ids; G1 actions
-// fire against rt/api/arm/request with the api_ids encoded in the
-// Explorer 1.9.3 bundle (verified against index-CtgArt9k.js cge fn).
-// The action bar swaps lists at render time on cloudApi.connectFamily.
+// G1 uses two distinct request IDs:
+//   G1State = 7101       — full-body postures/gaits (Zero Torque, Walk, ...)
+//   G1UpperLimbs = 7106  — upper-limb gestures (Handshake, Hug, ...)
+// The mode/gesture index goes in the parameter as {"data": N}, not in api_id.
+// And the topic splits by type: modes → rt/api/sport/request,
+// upper-limb gestures → rt/api/arm/request.
+const G1_STATE_API_ID = 7101;
+const G1_UPPER_LIMBS_API_ID = 7106;
+const wrap = (n: number): string => `{"data":${n}}`;
+
+// Family tagging policy: each list below is single-family.
 const GO2: ReadonlyArray<RobotFamily> = ['Go2'];
 const G1:  ReadonlyArray<RobotFamily> = ['G1'];
 
@@ -62,41 +120,44 @@ export const GO2_MODES: RobotAction[] = [
   { apiId: SPORT_CMD.RageMode, name: 'Rage', icon: '/icons/mode_runaway.svg', param: DATA_TRUE, families: GO2 },
 ];
 
-// G1 api_ids transcribed from Explorer 1.9.3 (cge function near
-// index-CtgArt9k.js:73063). All G1 modes/actions route through
-// rt/api/arm/request (G1_ARM_REQUEST) — see app.ts action-bar callback.
-/** G1 actions (arm gestures). */
+// G1 mode/gesture indices. Every G1 row carries the same api_id (7101
+// for modes, 7106 for upper-limb gestures); the index goes in `param`.
+/** G1 actions (arm gestures) — published on rt/api/arm/request, api_id=7106.
+ *  `g1Key` is the canonical gesture name the gating rules key on. */
 export const G1_ACTIONS: RobotAction[] = [
-  { apiId: 27, name: 'Handshake',    icon: '/icons/g1/icon_active_shakeHands.svg',           families: G1 },
-  { apiId: 18, name: 'High Five',    icon: '/icons/g1/icon_active_highFiveCmd.svg',          families: G1 },
-  { apiId: 19, name: 'Hug',          icon: '/icons/g1/icon_active_hug.svg',                  families: G1 },
-  { apiId: 26, name: 'High Wave',    icon: '/icons/g1/icon_active_hightWave.svg',            families: G1 },
-  { apiId: 17, name: 'Clap',         icon: '/icons/g1/icon_active_clamp.svg',                families: G1 },
-  { apiId: 25, name: 'Face Wave',    icon: '/icons/g1/icon_active_lowWave.svg',              families: G1 },
-  { apiId: 12, name: 'Left Kiss',    icon: '/icons/g1/icon_active_blowKiss.svg',             families: G1 },
-  { apiId: 20, name: 'Arm Heart',    icon: '/icons/g1/icon_active_makeHeartBothHands.svg',   families: G1 },
-  { apiId: 21, name: 'Right Heart',  icon: '/icons/g1/icon_active_makeHeartSingleHands.svg', families: G1 },
-  { apiId: 15, name: 'Hands Up',     icon: '/icons/g1/icon_active_bothHandsUp.svg',          families: G1 },
-  { apiId: 23, name: 'X-Ray',        icon: '/icons/g1/icon_active_singleHandsUp.svg',        families: G1 },
-  { apiId: 22, name: 'Reject',       icon: '/icons/g1/icon_active_refuse.svg',               families: G1 },
-  { apiId: 36, name: 'Forward Push', icon: '/icons/g1/icon_active_forwardPush.svg',          families: G1 },
-  { apiId: 99, name: 'Release',      icon: '/icons/g1/icon_active_shakeHands.svg',           families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(27), g1Key: 'shakeHands_1',        name: 'Handshake',     icon: '/icons/g1/icon_active_shakeHands.svg',           families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(18), g1Key: 'highFive',            name: 'High Five',     icon: '/icons/g1/icon_active_highFiveCmd.svg',          families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(19), g1Key: 'hug',                 name: 'Hug',           icon: '/icons/g1/icon_active_hug.svg',                  families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(26), g1Key: 'hightWave',           name: 'High Wave',     icon: '/icons/g1/icon_active_hightWave.svg',            families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(17), g1Key: 'clamp',               name: 'Clap',          icon: '/icons/g1/icon_active_clamp.svg',                families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(25), g1Key: 'lowWave',             name: 'Face Wave',     icon: '/icons/g1/icon_active_lowWave.svg',              families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(12), g1Key: 'blowKiss',            name: 'Left Kiss',     icon: '/icons/g1/icon_active_blowKiss.svg',             families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(20), g1Key: 'makeHeartBothHands',  name: 'Arm Heart',     icon: '/icons/g1/icon_active_makeHeartBothHands.svg',   families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(21), g1Key: 'makeHeartSingleHands',name: 'Right Heart',   icon: '/icons/g1/icon_active_makeHeartSingleHands.svg', families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(24), g1Key: 'ultramanRay',         name: 'X-Ray',         icon: '/icons/g1/icon_active_ultramanRay.svg',          families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(15), g1Key: 'bothHandsUp',         name: 'Hands Up',      icon: '/icons/g1/icon_active_bothHandsUp.svg',          families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(23), g1Key: 'singleHandsUp',       name: 'Right Hand Up', icon: '/icons/g1/icon_active_singleHandsUp.svg',        families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(22), g1Key: 'refuse',              name: 'Reject',        icon: '/icons/g1/icon_active_refuse.svg',               families: G1 },
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(36), g1Key: 'forwardPush',         name: 'Forward Push',  icon: '/icons/g1/icon_active_forwardPush.svg',          families: G1 },
+  // No dedicated releaseArm icon yet — reuse shakeHands.svg as a placeholder.
+  { topic: RTC_TOPIC.G1_ARM_REQUEST, apiId: G1_UPPER_LIMBS_API_ID, param: wrap(99), g1Key: 'releaseArm',          name: 'Release Arm',   icon: '/icons/g1/icon_active_shakeHands.svg',           families: G1 },
 ];
 
-/** G1 modes (persistent postures / gaits). */
+/** G1 modes (persistent postures / gaits) — published on rt/api/sport/request, api_id=7101.
+ *  `g1Key` is the canonical state name the gating rules key on. */
 export const G1_MODES: RobotAction[] = [
-  { apiId: 1,   name: 'Damping',       icon: '/icons/g1/icon_model_damping.svg',     families: G1 },
-  { apiId: 0,   name: 'Zero Torque',   icon: '/icons/g1/icon_model_zeroTorque.svg',  families: G1 },
-  { apiId: 4,   name: 'Preparation',   icon: '/icons/g1/icon_model_preparation.svg', families: G1 },
-  { apiId: 3,   name: 'Seating',       icon: '/icons/g1/icon_model_seating.svg',     families: G1 },
-  { apiId: 801, name: 'Run',           icon: '/icons/g1/icon_model_run.svg',         families: G1 },
-  { apiId: 500, name: 'Walk',          icon: '/icons/g1/icon_model_g1_walk.svg',     families: G1 },
-  { apiId: 501, name: 'Walk (Waist)',  icon: '/icons/g1/icon_model_g1_walk.svg',     families: G1 },
-  { apiId: 503, name: 'Dance',         icon: '/icons/g1/icon_model_dance_g1.svg',    families: G1 },
-  { apiId: 706, name: 'Squat',         icon: '/icons/g1/icon_model_squat.svg',       families: G1 },
-  { apiId: 706, name: 'Squat Up',      icon: '/icons/g1/icon_model_squatUp.svg',     families: G1 },
-  { apiId: 702, name: 'Lie Down',      icon: '/icons/g1/icon_model_lieUp.svg',       families: G1 },
-  { apiId: 812, name: 'Climb',         icon: '/icons/g1/icon_model_climb.svg',       families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(1),   g1Key: G1_STATE.Damp,        name: 'Damping',             icon: '/icons/g1/icon_model_damping.svg',     families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(0),   g1Key: G1_STATE.ZeroTorque,  name: 'Zero Torque',         icon: '/icons/g1/icon_model_zeroTorque.svg',  families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(4),   g1Key: G1_STATE.Preparation, name: 'Preparation',         icon: '/icons/g1/icon_model_preparation.svg', families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(3),   g1Key: G1_STATE.Seating,     name: 'Seating',             icon: '/icons/g1/icon_model_seating.svg',     families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(801), g1Key: G1_STATE.Run,         name: 'Run',                 icon: '/icons/g1/icon_model_run.svg',         families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(500), g1Key: G1_STATE.Walk,        name: 'Walk',                icon: '/icons/g1/icon_model_g1_walk.svg',     families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(501), g1Key: G1_STATE.Walk2,       name: 'Walk(Control waist)', icon: '/icons/g1/icon_model_g1_walk.svg',     families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(503), g1Key: G1_STATE.Dance,       name: 'Dance',               icon: '/icons/g1/icon_model_dance_g1.svg',    families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(706), g1Key: G1_STATE.Squat,       name: 'Squat',               icon: '/icons/g1/icon_model_squat.svg',       families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(706), g1Key: G1_STATE.SquatUp,     name: 'Squat-Up',            icon: '/icons/g1/icon_model_squatUp.svg',     families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(702), g1Key: G1_STATE.LieUp,       name: 'Lie Up',              icon: '/icons/g1/icon_model_lieUp.svg',       families: G1 },
+  { topic: RTC_TOPIC.SPORT_MOD, apiId: G1_STATE_API_ID, param: wrap(812), g1Key: G1_STATE.Climb,       name: 'Climb',               icon: '/icons/g1/icon_model_climb.svg',       families: G1 },
 ];
 
 // Legacy aliases retained so anything importing the old names keeps working.
@@ -114,6 +175,59 @@ export function modesForFamily(family: RobotFamily = cloudApi.connectFamily): Ro
 /** Whether this action is supported on the given (or current) robot family. */
 export function actionSupports(a: RobotAction, family: RobotFamily = cloudApi.connectFamily): boolean {
   return (a.families ?? GO2).includes(family);
+}
+
+// Key sets used by the G1 gating rules.
+const G1_DAMP_TARGETS: ReadonlyArray<string> = [
+  G1_STATE.ZeroTorque, G1_STATE.Preparation, G1_STATE.SquatUp, G1_STATE.LieUp,
+];
+const G1_PREPARATION_TARGETS: ReadonlyArray<string> = [
+  G1_STATE.Damp, G1_STATE.Walk, G1_STATE.Walk2, G1_STATE.Run,
+];
+const G1_LOCOMOTION_STATES: ReadonlyArray<string> = [
+  G1_STATE.Walk, G1_STATE.Walk2, G1_STATE.Run,
+];
+const G1_RUN_HIDDEN_GESTURES: ReadonlyArray<string> = [
+  'hug', 'makeHeartBothHands', 'bothHandsUp', 'singleHandsUp',
+];
+
+/** Decide whether a G1 action/mode item should be enabled given the
+ *  current sport state. Order and conditions are deliberate — change
+ *  them only after re-checking the full state-transition matrix.
+ *
+ *  `type` distinguishes arm gestures from full-body modes; the
+ *  arm-gestures-only-during-locomotion rule depends on it. */
+export function actionEnabledForG1State(
+  a: RobotAction,
+  state: G1State,
+  type: 'action' | 'mode',
+): boolean {
+  const k = a.g1Key;
+  if (!k) return true;
+
+  // Rule: not in Damp → ZeroTorque / Preparation / SquatUp / LieUp disabled.
+  if (state !== G1_STATE.Damp && G1_DAMP_TARGETS.includes(k)) return false;
+
+  // Rule: in ZeroTorque → only Damp is enabled.
+  if (state === G1_STATE.ZeroTorque && k !== G1_STATE.Damp) return false;
+
+  // Rule: in Squat → only Damp is enabled.
+  if (state === G1_STATE.Squat && k !== G1_STATE.Damp) return false;
+
+  // Rule: in Damp → only ZeroTorque / Preparation / SquatUp / LieUp enabled
+  //                 (also disables Damp itself so it can't be re-pressed).
+  if (state === G1_STATE.Damp && !G1_DAMP_TARGETS.includes(k)) return false;
+
+  // Rule: in Preparation → only Damp / Walk / Walk2 / Run enabled.
+  if (state === G1_STATE.Preparation && !G1_PREPARATION_TARGETS.includes(k)) return false;
+
+  // Rule: arm gestures require a locomotion-active state.
+  if (type === 'action' && !G1_LOCOMOTION_STATES.includes(state)) return false;
+
+  // Rule: in Run, 4 specific gestures are hidden (treat as disabled here).
+  if (state === G1_STATE.Run && G1_RUN_HIDDEN_GESTURES.includes(k)) return false;
+
+  return true;
 }
 
 export type ActionCallback = (action: RobotAction) => void;
@@ -138,6 +252,11 @@ export class ActionBar {
   private popup: HTMLElement | null = null;
   private onAction: ActionCallback;
   private editing = false;
+
+  /** Current G1 sport state, derived from LF_SPORT_MOD_STATE.mode by
+   *  the host app via setG1State(). Defaults to Idle (treated as
+   *  "unknown" → permissive). */
+  private g1State: G1State = G1_STATE.Idle;
 
   // Items that appear in the shortcut bar
   private shortcuts: ShortcutRef[];
@@ -200,16 +319,23 @@ export class ActionBar {
       const action = list[ref.index];
       if (!action) continue;
       if (!actionSupports(action)) continue;
+      const enabled = this.isActionEnabled(action, ref.type);
+      const isCurrent = this.isCurrentMode(action);
+      let cls = 'action-island-item';
+      if (!enabled) cls += ' action-disabled';
+      if (isCurrent) cls += ' action-current';
       const btn = document.createElement('button');
-      btn.className = 'action-island-item';
+      btn.className = cls;
+      btn.disabled = !enabled;
       btn.innerHTML = `
-        <div class="action-icon-wrap">
+        <div class="action-icon-wrap" style="--icon:url('${action.icon}')">
           <img src="${action.icon}" alt="${action.name}" draggable="false" />
         </div>
         <span>${action.name}</span>
       `;
       btn.addEventListener('click', (e) => {
         if (this.hasDragged) { e.preventDefault(); return; }
+        if (!this.isActionEnabled(action, ref.type)) return;
         btn.classList.add('active-state');
         setTimeout(() => btn.classList.remove('active-state'), 300);
         this.onAction(action);
@@ -358,10 +484,16 @@ export class ActionBar {
 
   private createPopupItem(action: RobotAction, itemIdx: number, type: 'action' | 'mode'): HTMLElement {
     const item = document.createElement('div');
-    item.className = 'action-popup-item';
+    const enabled = this.isActionEnabled(action, type);
+    const isCurrent = this.isCurrentMode(action);
+    let cls = 'action-popup-item';
+    if (!enabled) cls += ' action-disabled';
+    if (isCurrent) cls += ' action-current';
+    item.className = cls;
 
     const iconWrap = document.createElement('div');
     iconWrap.className = 'action-popup-icon';
+    iconWrap.style.setProperty('--icon', `url('${action.icon}')`);
     iconWrap.innerHTML = `<img src="${action.icon}" alt="${action.name}" draggable="false" />`;
     item.appendChild(iconWrap);
 
@@ -388,12 +520,38 @@ export class ActionBar {
       item.appendChild(badge);
     } else {
       item.addEventListener('click', () => {
+        if (!this.isActionEnabled(action, type)) return;
         this.onAction(action);
         this.closePopup();
       });
     }
 
     return item;
+  }
+
+  /** Highlight the row whose g1Key matches the current G1 sport state
+   *  (the "blue" current-mode indicator in the Unitree app). */
+  private isCurrentMode(action: RobotAction): boolean {
+    return cloudApi.connectFamily === 'G1'
+      && action.g1Key !== undefined
+      && action.g1Key === this.g1State;
+  }
+
+  /** Whether the given action should be active right now. Go2 rows are
+   *  always enabled; G1 rows consult the full rule set against the
+   *  most recent state pushed via setG1State(). */
+  private isActionEnabled(action: RobotAction, type: 'action' | 'mode'): boolean {
+    if (cloudApi.connectFamily !== 'G1') return true;
+    return actionEnabledForG1State(action, this.g1State, type);
+  }
+
+  /** Called by the host (app.ts) when LF_SPORT_MOD_STATE arrives.
+   *  Re-renders the shortcut bar and, if open, the popup. */
+  setG1State(state: G1State): void {
+    if (this.g1State === state) return;
+    this.g1State = state;
+    this.buildShortcutItems();
+    if (this.popup) this.rebuildPopupGrid();
   }
 
   private openPopupInEditMode(): void {

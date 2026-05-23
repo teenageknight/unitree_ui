@@ -547,22 +547,17 @@ export class App {
       // G1 upper-limb gestures carry topic=G1_ARM_REQUEST with api_id=7106,
       // Go2 rows have no topic and fall back to SPORT_MOD.
       const topic = action.topic ?? RTC_TOPIC.SPORT_MOD;
-      // Collapsed group: header on screen, full structured request
-      // appears inside when the user expands. requestId is the random int
-      // publishRequest mints — the robot echoes it back in
-      // header.identity.id of the response so the two can be paired.
-      log.ui.group(`[action] REQ → ${action.name} (topic=${topic} api_id=${action.apiId}, param=${action.param ?? '{}'})`);
-      const reqId = this.dataHandler?.publishRequest(topic, action.apiId, action.param);
-      log.ui.info('request:', {
-        action: action.name,
-        topic,
-        apiId: action.apiId,
-        param: action.param ?? '{}',
-        family: cloudApi.connectFamily,
-        g1Key: action.g1Key ?? null,
-        requestId: reqId ?? null,
+      // publishRequestLogged opens a collapsed devtools group with the
+      // structured request inside; the matching response comes through
+      // logResponse() in handleTopicMessage.
+      this.publishRequestLogged(topic, action.apiId, action.param, {
+        label: `action ${action.name}`,
+        extra: {
+          actionName: action.name,
+          family: cloudApi.connectFamily,
+          g1Key: action.g1Key ?? null,
+        },
       });
-      log.ui.groupEnd();
     });
     opWrapper.appendChild(w2);
 
@@ -591,9 +586,9 @@ export class App {
     }
 
     // Fetch initial states
-    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1004);
-    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1006);
-    this.dataHandler?.publishRequest(RTC_TOPIC.OBSTACLES_AVOID, 1002);
+    this.publishRequestLogged(RTC_TOPIC.VUI, 1004, undefined, { label: 'vui/get-volume' });
+    this.publishRequestLogged(RTC_TOPIC.VUI, 1006, undefined, { label: 'vui/get-brightness' });
+    this.publishRequestLogged(RTC_TOPIC.OBSTACLES_AVOID, 1002, undefined, { label: 'obstacles_avoid/get-state' });
   }
 
   private showStatusScreen(): void {
@@ -681,10 +676,10 @@ export class App {
    *
    *  Used on Settings-page entry and on every drawer open. */
   private probeSettingsState(): void {
-    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1004);
-    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1006);
-    this.dataHandler?.publishRequest(RTC_TOPIC.OBSTACLES_AVOID, 1002);
-    this.dataHandler?.publishRequest(RTC_TOPIC.PERMISSION_NET, 1001);
+    this.publishRequestLogged(RTC_TOPIC.VUI, 1004, undefined, { label: 'vui/get-volume' });
+    this.publishRequestLogged(RTC_TOPIC.VUI, 1006, undefined, { label: 'vui/get-brightness' });
+    this.publishRequestLogged(RTC_TOPIC.OBSTACLES_AVOID, 1002, undefined, { label: 'obstacles_avoid/get-state' });
+    this.publishRequestLogged(RTC_TOPIC.PERMISSION_NET, 1001, undefined, { label: 'permission_net/get' });
     if (cloudApi.connectFamily !== 'G1') {
       this.runBashScript('get_rfpower.sh');
     }
@@ -1154,8 +1149,8 @@ export class App {
 
     // APK init requests: firmware version, motion mode, gas sensor
     this.runBashScript('get_whole_packet_version.sh');
-    this.dataHandler.publishRequest(RTC_TOPIC.MOTION_SWITCHER, 1001);
-    this.dataHandler.publishRequest(RTC_TOPIC.GAS_SENSOR, 1002);
+    this.publishRequestLogged(RTC_TOPIC.MOTION_SWITCHER, 1001, undefined, { label: 'motion_switcher/get-mode' });
+    this.publishRequestLogged(RTC_TOPIC.GAS_SENSOR, 1002, undefined, { label: 'gas_sensor/get-state' });
 
     // G1 has dedicated hardware + software version scripts
     // (BaseRunner.GET_HARDWARE_VERSION, GET_SOFTWARE_VERSION) per
@@ -1177,11 +1172,74 @@ export class App {
    * request and tracks the request id so the response handler can route
    * to the right RobotStatus field. */
   private runBashScript(scriptLine: string): number | undefined {
-    if (!this.dataHandler) return;
-    const id = this.dataHandler.publishRequest(RTC_TOPIC.BASHRUNNER, 1001,
-      JSON.stringify({ script: scriptLine }));
-    this.bashrunnerPending.set(id, scriptLine);
+    const id = this.publishRequestLogged(
+      RTC_TOPIC.BASHRUNNER, 1001,
+      JSON.stringify({ script: scriptLine }),
+      { label: `bashrunner: ${scriptLine}` },
+    );
+    if (id !== undefined) this.bashrunnerPending.set(id, scriptLine);
     return id;
+  }
+
+  /** Wrap publishRequest in a collapsed devtools group so every API
+   *  call (status / errors / services / controls / mapping pages, plus
+   *  action-bar dispatch) renders as a single chevroned line with the
+   *  structured request payload tucked inside. The matching response
+   *  comes through logResponse() in handleTopicMessage. */
+  private publishRequestLogged(
+    topic: string,
+    apiId: number,
+    parameter?: string,
+    options?: { priority?: boolean; label?: string; extra?: Record<string, unknown> },
+  ): number | undefined {
+    if (!this.dataHandler) return undefined;
+    const niceLabel = options?.label ?? topic.replace(/^rt\/api\//, '').replace(/\/request$/, '');
+    const paramStr = parameter && parameter !== '{}' ? ` param=${parameter}` : '';
+    log.ui.group(`[req]  → ${niceLabel} api_id=${apiId}${paramStr}`);
+    const reqId = this.dataHandler.publishRequest(topic, apiId, parameter, { priority: options?.priority });
+    log.ui.info('request:', {
+      topic,
+      apiId,
+      parameter: parameter ?? '{}',
+      priority: options?.priority ?? false,
+      requestId: reqId,
+      ...options?.extra,
+    });
+    log.ui.groupEnd();
+    return reqId;
+  }
+
+  /** Central response logger — called for every rt/api/*\/response from
+   *  handleTopicMessage. Each response becomes a collapsed group with
+   *  the full header / data payload inside. Errors (header.status.code
+   *  != 0) also emit a warn line outside the group so they're visible
+   *  without expansion. */
+  private logResponse(topic: string, data: unknown): void {
+    const d = data as { header?: { identity?: { id?: number; api_id?: number }; status?: { code?: number } }; data?: unknown };
+    const code = d?.header?.status?.code;
+    const apiId = d?.header?.identity?.api_id;
+    const respId = d?.header?.identity?.id;
+    const niceLabel = topic.replace(/^rt\/api\//, '').replace(/\/response$/, '');
+    const status = code === 0 ? 'OK ' : 'ERR';
+    // Short data preview in the header; full payload is inside the group.
+    let preview = '';
+    if (d?.data !== undefined) {
+      const s = typeof d.data === 'string' ? d.data : JSON.stringify(d.data);
+      preview = ` data=${s.length > 60 ? s.slice(0, 60) + '…' : s}`;
+    }
+    log.ui.group(`[resp] ${status} ← ${niceLabel} api_id=${apiId} code=${code}${preview}`);
+    log.ui.info('response:', {
+      topic,
+      apiId,
+      code,
+      requestId: respId,
+      data: d?.data,
+      header: d?.header,
+    });
+    log.ui.groupEnd();
+    if (code !== 0 && code !== undefined) {
+      log.ui.warn(`[${niceLabel}] api error: api_id=${apiId} code=${code}`);
+    }
   }
 
   /** Lock (true) or unlock (false) the G1 waist motor. Fires
@@ -1212,48 +1270,25 @@ export class App {
     }
 
     if (msg.type === DATA_CHANNEL_TYPE.RESPONSE) {
+      // Centralised response logger — every rt/api/*\/response gets a
+      // collapsed group with the full header + data payload inside.
+      // Common G1 error codes: 7303 = wrong service, 3203 = api not
+      // implemented, 7404 = FSM_UNAVAILABLE, 7403 = private endpoint.
+      if (msg.topic) this.logResponse(msg.topic, msg.data);
+
       if (msg.topic === 'rt/api/vui/response') { this.handleVuiResponse(msg.data); return; }
       if (msg.topic === 'rt/api/obstacles_avoid/response') { this.handleObstacleResponse(msg.data); return; }
       if (msg.topic === 'rt/api/rm_con/response') { this.handlePermissionNetResponse(msg.data); return; }
       if (msg.topic === 'rt/api/bashrunner/response') { this.handleBashrunnerResponse(msg.data); return; }
       if (msg.topic === 'rt/api/motion_switcher/response') { this.handleMotionSwitcherResponse(msg.data); return; }
       if (msg.topic === 'rt/api/robot_state/response') { this.handleRobotStateResponse(msg.data); return; }
+      // sport/arm/loco responses have no further handling — logResponse
+      // above is the entire story for these topics.
       if (
         msg.topic === 'rt/api/sport/response' ||
         msg.topic === 'rt/api/arm/response' ||
         msg.topic === 'rt/api/loco/response'
-      ) {
-        // Echo of action-bar / locomotion requests. Each response is a
-        // collapsed group with the structured payload inside — expand
-        // the chevron to inspect. Errors also emit a separate warn line
-        // (visible without expansion). Common G1 error codes: 7303 =
-        // wrong service, 3203 = api not implemented, 7404 =
-        // FSM_UNAVAILABLE, 7403 = private endpoint.
-        const d = msg.data as { header?: { identity?: { id?: number; api_id?: number }; status?: { code?: number } }; data?: unknown };
-        const code = d?.header?.status?.code;
-        const apiId = d?.header?.identity?.api_id;
-        const respId = d?.header?.identity?.id;
-        const tag = msg.topic === 'rt/api/arm/response' ? 'g1:arm' :
-                    msg.topic === 'rt/api/loco/response' ? 'g1:loco' : 'sport';
-        const payload = d?.data !== undefined ? ` data=${JSON.stringify(d.data)}` : '';
-        const status = code === 0 ? 'OK ' : 'ERR';
-        log.ui.group(`[${tag}] ${status} ← api_id=${apiId} code=${code}${payload}`);
-        log.ui.info('response:', {
-          topic: msg.topic,
-          apiId,
-          code,
-          requestId: respId ?? null,
-          data: d?.data,
-          header: d?.header,
-        });
-        log.ui.groupEnd();
-        if (code !== 0) {
-          // Extra warn so the failure stays visible without expanding
-          // the group (DevTools warn icon also makes it searchable).
-          log.ui.warn(`[${tag}] api error: api_id=${apiId} code=${code}`);
-        }
-        return;
-      }
+      ) return;
     }
 
     if (!msg.topic || !msg.data) return;
@@ -1757,29 +1792,29 @@ export class App {
   }
 
   private handleRobotStateResponse(data: unknown): void {
-    log.ui.info('[go2:ui] Robot state response:', JSON.stringify(data));
+    // Generic response group is emitted upstream in handleTopicMessage
+    // via logResponse(). This method only handles the *behavioural*
+    // side-effects (ServiceSwitch protected-status, re-fetch).
     const d = data as {
       header?: { identity?: { api_id?: number }; status?: { code?: number } };
       data?: string;
     };
     const apiId = d.header?.identity?.api_id;
-    const code = d.header?.status?.code;
 
-    // ServiceSwitch response (1001)
+    // ServiceSwitch response (1001) — when the toggle succeeds, re-fetch
+    // the service list so the UI reflects the new state.
     if (apiId === 1001) {
-      if (code !== 0) {
-        log.ui.warn('[go2:ui] ServiceSwitch error code:', code);
-      }
       if (typeof d.data === 'string') {
         try {
           const parsed = JSON.parse(d.data) as { status?: number };
           if (parsed.status === 5) {
-            // Protected service error (5202)
-            log.ui.warn('[go2:ui] Service is protected');
+            // Protected service error (5202) — logResponse already
+            // warned on the non-zero header code; flag the specific
+            // sub-status for clarity.
+            log.ui.warn('[robot_state] service-switch: protected service (status=5)');
           }
         } catch { /* ignore */ }
       }
-      // Re-request service list after toggle
       this.requestServiceReport();
     }
   }
@@ -1815,20 +1850,22 @@ export class App {
   private requestServiceReport(): void {
     // API 1002: SetReportFreq — tells robot to publish service list to rt/servicestate
     // Duration 60s, auto-repeat before expiry
-    this.dataHandler?.publishRequest(
+    this.publishRequestLogged(
       RTC_TOPIC.ROBOT_STATE,
       1002,
       JSON.stringify({ interval: 2, duration: 60 }),
+      { label: 'robot_state/set-report-freq' },
     );
 
     // Clear any existing timer and set up auto-repeat before the 60s expires
     if (this.serviceReportTimer) clearInterval(this.serviceReportTimer);
     this.serviceReportTimer = setInterval(() => {
       if (this.currentScreen === 'services' && this.dataHandler) {
-        this.dataHandler.publishRequest(
+        this.publishRequestLogged(
           RTC_TOPIC.ROBOT_STATE,
           1002,
           JSON.stringify({ interval: 2, duration: 60 }),
+          { label: 'robot_state/set-report-freq (repeat)' },
         );
       } else {
         // Stop repeating if we left the services screen
@@ -1841,12 +1878,12 @@ export class App {
   }
 
   private toggleService(name: string, enable: boolean): void {
-    log.ui.info('[go2:ui] Toggle service:', name, 'enable:', enable);
     // API 1001: ServiceSwitch
-    this.dataHandler?.publishRequest(
+    this.publishRequestLogged(
       RTC_TOPIC.ROBOT_STATE,
       1001,
       JSON.stringify({ name, switch: enable ? 1 : 0 }),
+      { label: `robot_state/service-switch ${name}=${enable ? 'on' : 'off'}` },
     );
   }
 
@@ -1968,18 +2005,18 @@ export class App {
     // command queue. The old code sent Go2's StopMove + Damp on every
     // family, which G1 silently rejects with code 7404.
     if (cloudApi.connectFamily === 'G1') {
-      this.dataHandler?.publishRequest(
+      this.publishRequestLogged(
         RTC_TOPIC.SPORT_MOD,
         7101,
         '{"data":1}',
-        { priority: true },
+        { priority: true, label: 'estop g1: damp (G1State data=1)' },
       );
     } else {
-      this.dataHandler?.publishRequest(
+      this.publishRequestLogged(
         RTC_TOPIC.SPORT_MOD,
         SPORT_CMD.Damp,
         '{}',
-        { priority: true },
+        { priority: true, label: 'estop go2: damp' },
       );
     }
   }
@@ -2035,7 +2072,11 @@ export class App {
 
   private sendRadarToggle(enabled: boolean): void {
     this.settingsState.radarOn = enabled;
-    this.dataHandler?.publishRequest(RTC_TOPIC.OBSTACLES_AVOID, 1001, JSON.stringify({ enable: enabled }));
+    this.publishRequestLogged(
+      RTC_TOPIC.OBSTACLES_AVOID, 1001,
+      JSON.stringify({ enable: enabled }),
+      { label: `obstacles_avoid/set-radar ${enabled ? 'on' : 'off'}` },
+    );
   }
 
   private sendLidarToggle(enabled: boolean): void {
@@ -2050,12 +2091,20 @@ export class App {
 
   private sendLamp(level: number): void {
     this.settingsState.brightness = level;
-    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1005, JSON.stringify({ brightness: level }));
+    this.publishRequestLogged(
+      RTC_TOPIC.VUI, 1005,
+      JSON.stringify({ brightness: level }),
+      { label: `vui/set-brightness ${level}` },
+    );
   }
 
   private sendVolume(level: number): void {
     this.settingsState.volume = level;
-    this.dataHandler?.publishRequest(RTC_TOPIC.VUI, 1003, JSON.stringify({ volume: level }));
+    this.publishRequestLogged(
+      RTC_TOPIC.VUI, 1003,
+      JSON.stringify({ volume: level }),
+      { label: `vui/set-volume ${level}` },
+    );
   }
 
   /** Toggle the dog's RF remote-control radio. APK fires
@@ -2078,10 +2127,11 @@ export class App {
    *  enable_status == 2 means enabled. Verified from NetPermissionModel.kt. */
   private sendInternetRemote(enabled: boolean): void {
     this.settingsState.internetRemoteOn = enabled;
-    this.dataHandler?.publishRequest(
+    this.publishRequestLogged(
       RTC_TOPIC.PERMISSION_NET,
       1002,
       JSON.stringify({ enable_status: enabled ? 2 : 1 }),
+      { label: `permission_net/set ${enabled ? 'on' : 'off'}` },
     );
   }
 

@@ -1,3 +1,5 @@
+import { log } from '../logger';
+
 export interface GamepadInputState {
   lx: number;
   ly: number;
@@ -74,7 +76,7 @@ export class GamepadManager {
     }
 
     if (found && this.gamepadIndex === null) {
-      console.log('[gamepad] detected', found.id, 'index', found.index);
+      log.ui.info('[gamepad] detected', found.id, 'index', found.index);
       this.attach(found);
     } else if (!found && this.gamepadIndex !== null) {
       // The previously tracked pad disappeared from getGamepads
@@ -101,7 +103,7 @@ export class GamepadManager {
     // bits we send to the robot will be wrong. Sticks usually still work
     // because axes 0–3 are conventionally LX/LY/RX/RY.
     if (gp.mapping !== 'standard') {
-      console.warn(
+      log.ui.warn(
         `[gamepad] "${gp.id}" reported mapping="${gp.mapping || '(empty)'}" — `
         + 'button bits may not match the robot\'s remote layout. Sticks should '
         + 'still work. To get correct button mapping, remap the device to a '

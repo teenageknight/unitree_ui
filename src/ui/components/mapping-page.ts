@@ -3,6 +3,7 @@ import { RTC_TOPIC } from '../../protocol/topics';
 import SlamWorker from '../../workers/slam-worker?worker';
 import { putBundle, getBundle, deleteBundle, bytesToBase64, base64ToBytes, bundleToZip, zipToBundle, downloadBlob, type MapBundle } from '../../storage/map-pcd-store';
 import { theme } from '../theme';
+import { log, pipeWorkerLogs } from '../logger';
 import type { BluetoothStatus } from './bt-status-icon';
 import { PipCamera } from './pip-camera';
 import { makeCopyButton } from './copy-button';
@@ -340,11 +341,16 @@ export class MappingPage {
     // Init SLAM worker (libvoxel.wasm for point cloud processing)
     const worker = new SlamWorker();
     this.slamWorker = worker;
+    pipeWorkerLogs(worker, 'scene');
     worker.onmessage = (e: MessageEvent) => {
       const msg = e.data;
+      // pipeWorkerLogs forwards log frames to log.scene; bail before
+      // the type-dispatch below tries to interpret the envelope as a
+      // SLAM payload.
+      if (msg?.type === '__log__') return;
       if (msg.type === 'ready') {
         this.workerReady = true;
-        console.log('[slam] Worker ready');
+        log.ui.info('[slam] Worker ready');
       } else if (msg.type === 'newMap') {
         const { output, directOutput } = msg.data as {
           output: Float32Array;
@@ -879,7 +885,7 @@ export class MappingPage {
         this.publish(currentTopic, payload);
         const preview = typeof payload === 'string' ? payload : JSON.stringify(payload);
         this.addLog(`> ${currentTopic}: ${preview.slice(0, 120)}`);
-        console.log('[slam] Manual send:', currentTopic, payload);
+        log.ui.info('[slam] Manual send:', currentTopic, payload);
       });
       body.appendChild(sendBtn);
     }));
@@ -966,7 +972,7 @@ export class MappingPage {
   // ── Commands ──
 
   private sendCmd(cmd: string): void {
-    console.log(`[slam] Sending: ${cmd}`);
+    log.ui.info(`[slam] Sending: ${cmd}`);
     this.publish(RTC_TOPIC.USLAM_CMD, cmd);
   }
 
@@ -992,7 +998,7 @@ export class MappingPage {
         break;
 
       case 'goal':
-        console.log(`[slam] Goal pose: x=${x.toFixed(3)} y=${y.toFixed(3)} yaw=${yaw.toFixed(3)} (${yawDeg}°)`);
+        log.ui.info(`[slam] Goal pose: x=${x.toFixed(3)} y=${y.toFixed(3)} yaw=${yaw.toFixed(3)} (${yawDeg}°)`);
         // Setting a goal on a stopped nav module just registers the target —
         // the robot won't move until navigation/start is issued. Auto-start
         // here so dragging a goal "just works", regardless of whether nav was
@@ -1011,7 +1017,7 @@ export class MappingPage {
         break;
 
       case 'patrol':
-        console.log(`[slam] Patrol waypoint ${this.patrolCount + 1}: x=${x.toFixed(3)} y=${y.toFixed(3)} yaw=${yaw.toFixed(3)} (${yawDeg}°)`);
+        log.ui.info(`[slam] Patrol waypoint ${this.patrolCount + 1}: x=${x.toFixed(3)} y=${y.toFixed(3)} yaw=${yaw.toFixed(3)} (${yawDeg}°)`);
         this.patrolPoints.push({ x, y, yaw });
         this.slamScene?.addPatrolMarker(x, y, yaw, this.patrolCount);
         this.patrolCount++;
@@ -1663,7 +1669,7 @@ export class MappingPage {
 
   handleTopicMessage(topic: string, data: unknown): void {
     if (this.topicLogCount < 30) {
-      console.log('[slam] Topic:', topic, 'data type:', typeof data, data instanceof ArrayBuffer ? `AB(${data.byteLength})` : '');
+      log.ui.info('[slam] Topic:', topic, 'data type:', typeof data, data instanceof ArrayBuffer ? `AB(${data.byteLength})` : '');
       this.topicLogCount++;
     }
     switch (topic) {
@@ -1694,7 +1700,7 @@ export class MappingPage {
   private handleServerLog(data: unknown): void {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     this.addLog(msg);
-    console.log('[slam] Server log:', msg);
+    log.ui.info('[slam] Server log:', msg);
 
     // ── Map state transitions ──
     if (msg.includes('mapping/stop/success')) {
@@ -2136,7 +2142,7 @@ export class MappingPage {
   }
 
   private handleCloudMap(data: unknown): void {
-    console.log('[slam] Cloud map received, type:', typeof data,
+    log.ui.info('[slam] Cloud map received, type:', typeof data,
       data instanceof ArrayBuffer ? `ArrayBuffer(${data.byteLength})` : '');
 
     // PCD data may arrive as binary ArrayBuffer or nested in data.data

@@ -37,12 +37,12 @@ export class SettingsDrawer {
     const header = document.createElement('div');
     header.className = 'settings-drawer-header';
     const title = document.createElement('h2');
-    title.textContent = 'Settings';
+    title.textContent = 'Controls';
     header.appendChild(title);
     const closeBtn = document.createElement('button');
     closeBtn.className = 'settings-drawer-close';
     closeBtn.type = 'button';
-    closeBtn.setAttribute('aria-label', 'Close settings');
+    closeBtn.setAttribute('aria-label', 'Close controls');
     closeBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
     closeBtn.addEventListener('click', () => this.close());
     header.appendChild(closeBtn);

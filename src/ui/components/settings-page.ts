@@ -98,7 +98,7 @@ export class SettingsPage {
       backBtn.addEventListener('click', onBack);
       header.appendChild(backBtn);
       const title = document.createElement('h2');
-      title.textContent = 'Settings';
+      title.textContent = 'Controls';
       header.appendChild(title);
       this.container.appendChild(header);
     }

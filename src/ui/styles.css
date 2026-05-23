@@ -985,6 +985,30 @@ html[data-theme="light"] .settings-drawer-close:hover {
   transform: translateY(0);
 }
 
+/* View-mode toast (Robot view / Holistic view). Lives above the joysticks,
+   centred so it doesn't collide with the estop banner on the right. */
+.scene-toast {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translate(-50%, -6px);
+  padding: 8px 16px;
+  background: rgba(20, 22, 36, 0.92);
+  color: #fff;
+  font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  z-index: 25;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s;
+}
+
+.scene-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 @keyframes stopFlash {
   0% {
     background: #ff4848;
@@ -2015,6 +2039,13 @@ html[data-theme="light"] .mapping-header-cluster .nav-bt-icon {
   flex-direction: column;
   align-items: stretch;
   gap: 10px;
+}
+
+/* Muted state for category rows when global logging is disabled — the
+   per-category toggles are still clickable but visually de-emphasized
+   so it's clear the master kill-switch overrides them. */
+.settings-section-muted {
+  opacity: 0.45;
 }
 
 /* Remote Control ID readout row (under the toggle). */

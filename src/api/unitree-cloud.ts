@@ -6,6 +6,7 @@
 
 import forge from 'node-forge';
 import { setCachedAesKey } from './aes-key-derive';
+import { log } from '../ui/logger';
 
 const API_BASE = '/unitree-api';
 const FIRMWARE_CDN = 'https://firmware-cdn.unitree.com';
@@ -407,6 +408,16 @@ export class UnitreeCloudAPI {
     return ok;
   }
 
+  /** Force a refresh regardless of expiry. Used by the "Refresh now"
+   *  button on the Account page. Returns true if the API minted a new
+   *  pair, false if the refresh token was rejected (session cleared). */
+  async refreshAccessToken(): Promise<boolean> {
+    if (!this.refreshToken) { this.clearSession(); return false; }
+    const ok = await this.doRefreshToken();
+    if (!ok) this.clearSession();
+    return ok;
+  }
+
   // ─── HTTP helpers ────────────────────────────────────────────────
 
   private async request<T>(method: string, path: string, params?: Record<string, string>, platform: Platform = 'Android', familyOverride?: RobotFamily): Promise<ApiResponse<T>> {
@@ -414,17 +425,40 @@ export class UnitreeCloudAPI {
       ? `${API_BASE}/${path}?${new URLSearchParams(params)}`
       : `${API_BASE}/${path}`;
 
-    console.groupCollapsed(`[cloud-api] ${method} ${path}`);
-    if (params) console.log('params:', params);
+    const family = familyOverride ?? this._family;
+    const t0 = performance.now();
 
-    const resp = await fetch(url, {
-      method,
-      headers: buildHeaders(this.token, platform, familyOverride ?? this._family, this._region),
-      body: method === 'POST' && params ? new URLSearchParams(params) : undefined,
-      signal: AbortSignal.timeout(15000),
+    // Each request is a collapsed devtools group — the header
+    // ("[account] GET device/bind/list") shows inline; clicking the
+    // chevron expands to reveal the request + response payloads. The
+    // body uses .info (not .debug) so it stays visible at Chrome's
+    // default level filter once the user opens the group.
+    log.account.group(`${method} ${path}`);
+    log.account.info('request:', {
+      method, path, params: params ?? null, platform, family, region: this._region,
+      hasToken: !!this.token, url,
     });
 
-    if (!resp.ok) { console.groupEnd(); throw new Error(`HTTP ${resp.status}`); }
+    let resp: Response;
+    try {
+      resp = await fetch(url, {
+        method,
+        headers: buildHeaders(this.token, platform, family, this._region),
+        body: method === 'POST' && params ? new URLSearchParams(params) : undefined,
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (err) {
+      log.account.warn(`${method} ${path} — network error:`, err);
+      log.account.groupEnd();
+      throw err;
+    }
+
+    const dtMs = Math.round(performance.now() - t0);
+    if (!resp.ok) {
+      log.account.warn(`${method} ${path} — HTTP ${resp.status} (${dtMs}ms)`);
+      log.account.groupEnd();
+      throw new Error(`HTTP ${resp.status}`);
+    }
 
     // Upstream returns either plain JSON (most endpoints) or raw AES-128-CFB
     // ciphertext (e.g. the /announcement endpoint since app v1.12). Compressed
@@ -458,21 +492,38 @@ export class UnitreeCloudAPI {
           json = JSON.parse(r.utf8);
           _lastResponseMeta.decryption = 'body-cfb';
           _lastResponseMeta.decryptedPreview = r.utf8.slice(0, 400);
-          console.log(`[cloud-api] ${path}: AES-CFB decrypted (${rawBytes.length} bytes ciphertext)`);
+          log.account.debug(`${path}: AES-CFB decrypted (${rawBytes.length} bytes ciphertext)`);
         } catch { /* fall through to failure */ }
       }
       if (!json) {
         const decHex = bytesToHex(r.raw, 32);
         _lastResponseMeta.decryption = 'failed';
         _lastResponseMeta.decryptedPreview = `(non-UTF-8) hex: ${decHex}`;
-        console.warn(`[cloud-api] ${path}: decode failed. raw: ${hexPreview} · aes-cfb: ${decHex}`);
-        console.groupEnd();
+        log.account.warn(`${path}: decode failed. raw: ${hexPreview} · aes-cfb: ${decHex}`);
+        log.account.groupEnd();
         throw new Error(`Response decode failed (plain + AES-CFB). Body hex: ${hexPreview}`);
       }
     }
 
     const result = json as ApiResponse<T>;
-    console.groupEnd();
+    log.account.info('response:', {
+      httpStatus: resp.status,
+      durationMs: dtMs,
+      bytes: rawBytes.length,
+      contentType,
+      compression: contentEncoding,
+      decryption: _lastResponseMeta.decryption,
+      code: result.code,
+      errorMsg: result.errorMsg ?? null,
+      data: result.data,
+    });
+    if (result.code !== 100) {
+      // API-level failure (auth, validation, server). Warn so the
+      // user spots it even at 'warn' verbosity without expanding the
+      // group.
+      log.account.warn(`${method} ${path} — api code=${result.code}${result.errorMsg ? ' ' + result.errorMsg : ''}`);
+    }
+    log.account.groupEnd();
 
     // Auto-refresh on token expiry
     if (result.code === 1001 && this.refreshToken) {

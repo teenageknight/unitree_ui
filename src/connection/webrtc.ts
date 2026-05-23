@@ -1,5 +1,6 @@
 import type { ConnectionCallbacks, ConnectionState, DataChannelMessage, TurnServerInfo } from '../types';
 import { cloudApi } from '../api/unitree-cloud';
+import { log } from '../ui/logger';
 
 // `${rtcTag()}` / `[g1:rtc]` — picked up at log time so the prefix follows
 // whatever family is currently selected in the UI.
@@ -26,7 +27,7 @@ export class WebRTCConnection {
       bundlePolicy: 'max-bundle',
     };
 
-    console.log(`${rtcTag()} Creating RTCPeerConnection`, config);
+    log.webrtc.info(`${rtcTag()} Creating RTCPeerConnection`, config);
     this.pc = new RTCPeerConnection(config);
     this.setupPeerConnection();
   }
@@ -44,7 +45,7 @@ export class WebRTCConnection {
 
     // Also handle data channels created by the robot (remote peer)
     this.pc.ondatachannel = (event) => {
-      console.log(`${rtcTag()} Remote data channel received:`, event.channel.label);
+      log.webrtc.info(`${rtcTag()} Remote data channel received:`, event.channel.label);
       event.channel.binaryType = 'arraybuffer';
       this.setupChannelHandlers(event.channel);
       // Use the remote channel for sending too if our channel isn't open
@@ -54,7 +55,7 @@ export class WebRTCConnection {
     };
 
     this.pc.ontrack = (event) => {
-      console.log(`${rtcTag()} Track received: ${event.track.kind}`);
+      log.webrtc.info(`${rtcTag()} Track received: ${event.track.kind}`);
       if (event.track.kind === 'video') {
         this.callbacks.onVideoTrack(event.streams[0] ?? new MediaStream([event.track]));
       } else if (event.track.kind === 'audio') {
@@ -64,17 +65,17 @@ export class WebRTCConnection {
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log(`${rtcTag()} ICE candidate:`, event.candidate.candidate);
+        log.webrtc.debug(`${rtcTag()} ICE candidate:`, event.candidate.candidate);
       }
     };
 
     this.pc.oniceconnectionstatechange = () => {
-      console.log(`${rtcTag()} ICE connection state:`, this.pc.iceConnectionState);
+      log.webrtc.info(`${rtcTag()} ICE connection state:`, this.pc.iceConnectionState);
     };
 
     this.pc.onconnectionstatechange = () => {
       const pcState = this.pc.connectionState;
-      console.log(`${rtcTag()} Connection state:`, pcState);
+      log.webrtc.info(`${rtcTag()} Connection state:`, pcState);
       if (pcState === 'failed' || pcState === 'closed') {
         this.setState('failed');
       } else if (pcState === 'connecting') {
@@ -86,17 +87,17 @@ export class WebRTCConnection {
     };
 
     this.pc.onsignalingstatechange = () => {
-      console.log(`${rtcTag()} Signaling state:`, this.pc.signalingState);
+      log.webrtc.debug(`${rtcTag()} Signaling state:`, this.pc.signalingState);
     };
   }
 
   private setupChannelHandlers(channel: RTCDataChannel): void {
     channel.onopen = () => {
-      console.log(`${rtcTag()} Data channel OPEN:`, channel.label);
+      log.webrtc.info(`${rtcTag()} Data channel OPEN:`, channel.label);
       this.setState('connected');
       // Flush any messages queued while channel was connecting
       if (this.sendQueue.length > 0) {
-        console.log(`${rtcTag()} Flushing ${this.sendQueue.length} queued messages`);
+        log.webrtc.debug(`${rtcTag()} Flushing ${this.sendQueue.length} queued messages`);
         for (const msg of this.sendQueue) {
           channel.send(msg);
         }
@@ -105,12 +106,12 @@ export class WebRTCConnection {
     };
 
     channel.onclose = () => {
-      console.log(`${rtcTag()} Data channel CLOSED:`, channel.label);
+      log.webrtc.info(`${rtcTag()} Data channel CLOSED:`, channel.label);
       this.setState('disconnected');
     };
 
     channel.onerror = (event) => {
-      console.error(`${rtcTag()} Data channel error:`, event);
+      log.webrtc.error(`${rtcTag()} Data channel error:`, event);
     };
 
     channel.onmessage = (event) => {
@@ -207,7 +208,7 @@ export class WebRTCConnection {
 
   private setState(state: ConnectionState): void {
     if (this.state !== state) {
-      console.log(`${rtcTag()} State: ${this.state} → ${state}`);
+      log.webrtc.info(`${rtcTag()} State: ${this.state} → ${state}`);
       this.state = state;
       this.callbacks.onStateChange(state);
     }
@@ -217,7 +218,7 @@ export class WebRTCConnection {
     this.setState('connecting');
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
-    console.log(`${rtcTag()} Local description set, gathering ICE candidates...`);
+    log.webrtc.debug(`${rtcTag()} Local description set, gathering ICE candidates...`);
 
     await new Promise<void>((resolve) => {
       if (this.pc.iceGatheringState === 'complete') {
@@ -226,7 +227,7 @@ export class WebRTCConnection {
       }
       this.pc.onicegatheringstatechange = () => {
         if (this.pc.iceGatheringState === 'complete') {
-          console.log(`${rtcTag()} ICE gathering complete`);
+          log.webrtc.debug(`${rtcTag()} ICE gathering complete`);
           resolve();
         }
       };
@@ -236,12 +237,12 @@ export class WebRTCConnection {
   }
 
   async setAnswer(sdp: string): Promise<void> {
-    console.log(`${rtcTag()} Setting remote description (answer)...`);
+    log.webrtc.debug(`${rtcTag()} Setting remote description (answer)...`);
     await this.pc.setRemoteDescription({
       type: 'answer',
       sdp,
     });
-    console.log(`${rtcTag()} Remote description set successfully`);
+    log.webrtc.debug(`${rtcTag()} Remote description set successfully`);
   }
 
   send(msg: DataChannelMessage): void {
@@ -250,13 +251,13 @@ export class WebRTCConnection {
       this.channel.send(str);
     } else {
       // Queue message — will be flushed when channel opens (fixes Firefox timing)
-      console.log(`${rtcTag()} Channel not open yet, queuing message`);
+      log.webrtc.debug(`${rtcTag()} Channel not open yet, queuing message`);
       this.sendQueue.push(str);
     }
   }
 
   close(): void {
-    console.log(`${rtcTag()} Closing connection`);
+    log.webrtc.info(`${rtcTag()} Closing connection`);
     this.channel?.close();
     this.pc.close();
     this.setState('disconnected');

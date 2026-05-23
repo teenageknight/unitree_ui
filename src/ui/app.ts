@@ -14,6 +14,8 @@ import { MappingPage } from './components/mapping-page';
 import { AccountPage } from './components/account-page';
 import { BtStatusIcon, type BluetoothStatus } from './components/bt-status-icon';
 import { BtPage } from './components/bt-page';
+import { AppSettingsPage } from './components/app-settings-page';
+import { log } from './logger';
 import { ThemeToggle } from './components/theme-toggle';
 import { AccountStatusIcon } from './components/account-status-icon';
 import { btBackend } from '../api/bt-backend';
@@ -31,7 +33,7 @@ import { ErrorsPage } from './components/errors-page';
 import type { WebRTCConnection } from '../connection/webrtc';
 import type { Scene3D } from './scene/scene';
 
-type Screen = 'landing' | 'connection' | 'hub' | 'control' | 'status' | 'services' | 'settings' | 'mapping' | 'account' | 'bt' | 'errors';
+type Screen = 'landing' | 'connection' | 'hub' | 'control' | 'status' | 'services' | 'settings' | 'app-settings' | 'mapping' | 'account' | 'bt' | 'errors';
 
 /** Translate raw connector errors into user-facing messages. The G1
  *  RockChip accepts a single WebRTC client at a time — 429 on con_ing
@@ -137,6 +139,7 @@ export class App {
   private leftJoystickWrap: HTMLElement | null = null;
   private rightJoystickWrap: HTMLElement | null = null;
   private btPage: BtPage | null = null;
+  private appSettingsPage: AppSettingsPage | null = null;
   // True when BT page is reached via the landing tile (vs the hub).
   // Drives where the back button returns to (mirrors accountFromLanding).
   private btFromLanding = false;
@@ -222,6 +225,27 @@ export class App {
       });
     }
 
+    // Background refresh — checks every 5 minutes whether the access
+    // token is within 10 minutes of expiry, and rolls it over if so.
+    // Without this, the only refresh path during a long session is the
+    // 1001-on-request retry, which still leaves the token expired
+    // between requests. ensureFreshToken short-circuits when there's
+    // no session, so this is safe to leave running across logout.
+    setInterval(() => { void cloudApi.ensureFreshToken(); }, 5 * 60 * 1000);
+
+    // Visibilitychange hook — if the tab was hidden for over a minute,
+    // refresh on return. Covers laptop-sleep and long-background-tab
+    // cases where the 5-minute timer was throttled/paused by the browser.
+    let lastHiddenAt = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        lastHiddenAt = Date.now();
+      } else if (lastHiddenAt && Date.now() - lastHiddenAt > 60 * 1000) {
+        lastHiddenAt = 0;
+        void cloudApi.ensureFreshToken();
+      }
+    });
+
     // USB / wired gamepad detection (Gamepad API). Long-lived: scans for
     // pads across reconnects, so we only tear it down when the page unloads.
     this.gamepadManager = new GamepadManager((connected, id) => {
@@ -286,6 +310,12 @@ export class App {
       this.showBtScreen();
     });
     tiles.appendChild(btBtn);
+
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'hub-btn hub-btn-secondary';
+    settingsBtn.innerHTML = `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Settings</span>`;
+    settingsBtn.addEventListener('click', () => this.showAppSettingsScreen());
+    tiles.appendChild(settingsBtn);
 
     wrap.appendChild(tiles);
     this.root.appendChild(wrap);
@@ -410,7 +440,7 @@ export class App {
     // without entering the control view.
     const settingsBtn = document.createElement('button');
     settingsBtn.className = `hub-btn ${needsWebRTC ? 'hub-btn-disabled' : 'hub-btn-secondary'}`;
-    settingsBtn.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span>Settings</span>`;
+    settingsBtn.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span>Controls</span>`;
     if (!needsWebRTC) settingsBtn.addEventListener('click', () => this.showSettingsScreen());
     else settingsBtn.disabled = true;
     btnRow.appendChild(settingsBtn);
@@ -517,8 +547,22 @@ export class App {
       // G1 upper-limb gestures carry topic=G1_ARM_REQUEST with api_id=7106,
       // Go2 rows have no topic and fall back to SPORT_MOD.
       const topic = action.topic ?? RTC_TOPIC.SPORT_MOD;
-      console.log(`[action] REQ → ${action.name} (topic=${topic} api_id=${action.apiId}, param=${action.param ?? '{}'})`);
-      this.dataHandler?.publishRequest(topic, action.apiId, action.param);
+      // Collapsed group: header on screen, full structured request
+      // appears inside when the user expands. requestId is the random int
+      // publishRequest mints — the robot echoes it back in
+      // header.identity.id of the response so the two can be paired.
+      log.ui.group(`[action] REQ → ${action.name} (topic=${topic} api_id=${action.apiId}, param=${action.param ?? '{}'})`);
+      const reqId = this.dataHandler?.publishRequest(topic, action.apiId, action.param);
+      log.ui.info('request:', {
+        action: action.name,
+        topic,
+        apiId: action.apiId,
+        param: action.param ?? '{}',
+        family: cloudApi.connectFamily,
+        g1Key: action.g1Key ?? null,
+        requestId: reqId ?? null,
+      });
+      log.ui.groupEnd();
     });
     opWrapper.appendChild(w2);
 
@@ -740,6 +784,20 @@ export class App {
     this.btPage = new BtPage(this.root, back);
   }
 
+  /** Landing-screen Settings page — app-wide preferences (theme, console
+   *  logging). Distinct from the hub's robot Settings page which controls
+   *  on-robot state (volume, lidar, etc.). */
+  private showAppSettingsScreen(): void {
+    this.currentScreen = 'app-settings';
+    this.root.innerHTML = '';
+    this.root.className = 'app-root status-screen';
+    this.btStatusIcon?.setVisible(true); this.themeToggle?.setVisible(true);
+    this.accountStatusIcon?.setVisible(true);
+    this.errorsBadgeFloating?.setVisible(true);
+    this.appSettingsPage?.destroy();
+    this.appSettingsPage = new AppSettingsPage(this.root, () => this.showLandingScreen());
+  }
+
   private goToHub(): void {
     // Clean up control UI resources without disconnecting
     this.stopJoystickLoop();
@@ -808,10 +866,36 @@ export class App {
       canvas.id = 'three-canvas';
       this.root.insertBefore(canvas, this.controlUi);
       this.scene3d = new S3D(canvas);
+      // Surface the APK's toastMsg_4 / _5 — a one-liner indicating the
+      // view that was just entered. Reuses the estop-toast surface for
+      // visual consistency.
+      this.scene3d.onViewChange = (view) => {
+        const label = view === 'follow' ? 'Robot view' : 'Holistic view';
+        this.showSceneToast(`Switched to ${label}`);
+      };
     } catch (err) {
-      console.warn('[go2:ui] WebGL not available:', err);
+      log.ui.warn('[go2:ui] WebGL not available:', err);
       this.root.classList.add('no-webgl');
     }
+  }
+
+  private sceneToastEl: HTMLElement | null = null;
+  private sceneToastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Show a transient message inside the 3D view (view-mode change,
+   *  in future maybe other passive events). Mirrors the estop toast
+   *  surface but lives separately so the two don't fight. */
+  private showSceneToast(text: string): void {
+    if (this.sceneToastTimer) clearTimeout(this.sceneToastTimer);
+    if (!this.sceneToastEl) {
+      this.sceneToastEl = document.createElement('div');
+      this.sceneToastEl.className = 'scene-toast';
+      (this.controlUi ?? document.body).appendChild(this.sceneToastEl);
+    }
+    this.sceneToastEl.textContent = text;
+    this.sceneToastEl.classList.add('show');
+    this.sceneToastTimer = setTimeout(() => {
+      this.sceneToastEl?.classList.remove('show');
+    }, 1500);
   }
 
   // ── View Toggle: 'three' (3D full, camera PIP) or 'video' (camera full) ──
@@ -1139,21 +1223,34 @@ export class App {
         msg.topic === 'rt/api/arm/response' ||
         msg.topic === 'rt/api/loco/response'
       ) {
-        // Echo of action-bar / locomotion requests. Log every response so
-        // the user can confirm requests are landing — success at info,
-        // failure at warn. Common G1 error codes: 7303 = wrong service,
-        // 3203 = api not implemented, 7404 = FSM_UNAVAILABLE, 7403 =
-        // private endpoint.
-        const d = msg.data as { header?: { identity?: { api_id?: number }; status?: { code?: number } }; data?: unknown };
+        // Echo of action-bar / locomotion requests. Each response is a
+        // collapsed group with the structured payload inside — expand
+        // the chevron to inspect. Errors also emit a separate warn line
+        // (visible without expansion). Common G1 error codes: 7303 =
+        // wrong service, 3203 = api not implemented, 7404 =
+        // FSM_UNAVAILABLE, 7403 = private endpoint.
+        const d = msg.data as { header?: { identity?: { id?: number; api_id?: number }; status?: { code?: number } }; data?: unknown };
         const code = d?.header?.status?.code;
         const apiId = d?.header?.identity?.api_id;
+        const respId = d?.header?.identity?.id;
         const tag = msg.topic === 'rt/api/arm/response' ? 'g1:arm' :
                     msg.topic === 'rt/api/loco/response' ? 'g1:loco' : 'sport';
         const payload = d?.data !== undefined ? ` data=${JSON.stringify(d.data)}` : '';
-        if (code === 0) {
-          console.log(`[${tag}] OK  ← api_id=${apiId} code=0${payload}`);
-        } else {
-          console.warn(`[${tag}] ERR ← api_id=${apiId} code=${code}${payload}`);
+        const status = code === 0 ? 'OK ' : 'ERR';
+        log.ui.group(`[${tag}] ${status} ← api_id=${apiId} code=${code}${payload}`);
+        log.ui.info('response:', {
+          topic: msg.topic,
+          apiId,
+          code,
+          requestId: respId ?? null,
+          data: d?.data,
+          header: d?.header,
+        });
+        log.ui.groupEnd();
+        if (code !== 0) {
+          // Extra warn so the failure stays visible without expanding
+          // the group (DevTools warn icon also makes it searchable).
+          log.ui.warn(`[${tag}] api error: api_id=${apiId} code=${code}`);
         }
         return;
       }
@@ -1525,7 +1622,7 @@ export class App {
     const scriptName = scriptLine ? scriptLine.split(' ')[0] : '?';
 
     if (code !== 0 || typeof d.data !== 'string') {
-      if (scriptLine) console.warn(`[bashrunner] ${scriptName} failed (code=${code})`);
+      if (scriptLine) log.ui.warn(`[bashrunner] ${scriptName} failed (code=${code})`);
       // Optimistic SettingsPage toggles need to be reverted on failure —
       // re-fire get_rfpower.sh to put the UI back in sync with the dog.
       if (
@@ -1660,7 +1757,7 @@ export class App {
   }
 
   private handleRobotStateResponse(data: unknown): void {
-    console.log('[go2:ui] Robot state response:', JSON.stringify(data));
+    log.ui.info('[go2:ui] Robot state response:', JSON.stringify(data));
     const d = data as {
       header?: { identity?: { api_id?: number }; status?: { code?: number } };
       data?: string;
@@ -1671,14 +1768,14 @@ export class App {
     // ServiceSwitch response (1001)
     if (apiId === 1001) {
       if (code !== 0) {
-        console.warn('[go2:ui] ServiceSwitch error code:', code);
+        log.ui.warn('[go2:ui] ServiceSwitch error code:', code);
       }
       if (typeof d.data === 'string') {
         try {
           const parsed = JSON.parse(d.data) as { status?: number };
           if (parsed.status === 5) {
             // Protected service error (5202)
-            console.warn('[go2:ui] Service is protected');
+            log.ui.warn('[go2:ui] Service is protected');
           }
         } catch { /* ignore */ }
       }
@@ -1694,7 +1791,7 @@ export class App {
       try {
         entries = JSON.parse(data);
       } catch {
-        console.warn('[go2:ui] Failed to parse service state string');
+        log.ui.warn('[go2:ui] Failed to parse service state string');
         return;
       }
     } else if (Array.isArray(data)) {
@@ -1744,7 +1841,7 @@ export class App {
   }
 
   private toggleService(name: string, enable: boolean): void {
-    console.log('[go2:ui] Toggle service:', name, 'enable:', enable);
+    log.ui.info('[go2:ui] Toggle service:', name, 'enable:', enable);
     // API 1001: ServiceSwitch
     this.dataHandler?.publishRequest(
       RTC_TOPIC.ROBOT_STATE,
@@ -2018,6 +2115,8 @@ export class App {
     this.mappingPage = null;
     this.accountPage?.destroy();
     this.accountPage = null;
+    this.appSettingsPage?.destroy();
+    this.appSettingsPage = null;
     this.serviceEntries = [];
     this.settingsState = {
       radarOn: false, lidarOn: true, volume: 0, brightness: 0, waistLocked: false,
@@ -2031,6 +2130,9 @@ export class App {
     this.scene3d?.destroy();
     this.scene3d = null;
     this.viewMode = 'three';
+    if (this.sceneToastTimer) { clearTimeout(this.sceneToastTimer); this.sceneToastTimer = null; }
+    this.sceneToastEl?.remove();
+    this.sceneToastEl = null;
 
     // Auto-connect means the hub is always backed by an active WebRTC
     // session. On disconnect (any mode) drop back to landing — re-entering

@@ -17,6 +17,10 @@ export class AccountPage {
   private tabBar!: HTMLElement;
   private currentTab: Tab = 'devices';
   private tabButtons: Map<Tab, HTMLElement> = new Map();
+  /** Live-ticking "Refreshed Xs ago" label next to the access token.
+   *  Updated by a 1-second interval while this page is mounted. */
+  private refreshAgeEl: HTMLElement | null = null;
+  private refreshAgeTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(parent: HTMLElement, private onBack: () => void) {
     this.container = document.createElement('div');
@@ -1734,6 +1738,47 @@ export class AccountPage {
     row.appendChild(this.copyBtn(token));
     wrap.appendChild(row);
 
+    // Refresh meta row: "Refreshed Xs ago" + manual refresh button.
+    // Ticks live every second; the button hits the public
+    // refreshAccessToken() helper which always renews (vs ensureFreshToken
+    // which only renews near expiry).
+    const meta = document.createElement('div');
+    meta.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;font-size:11px;color:#888;';
+
+    const ageEl = document.createElement('span');
+    ageEl.textContent = this.formatRefreshAge(cloudApi.lastRefreshedAt);
+    this.refreshAgeEl = ageEl;
+    meta.appendChild(ageEl);
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'acct-btn';
+    refreshBtn.style.cssText = 'padding:3px 10px;font-size:11px;';
+    refreshBtn.textContent = 'Refresh now';
+    refreshBtn.addEventListener('click', async () => {
+      if (refreshBtn.disabled) return;
+      refreshBtn.disabled = true;
+      const originalText = refreshBtn.textContent;
+      refreshBtn.textContent = 'Refreshing…';
+      try {
+        const ok = await cloudApi.refreshAccessToken();
+        if (ok) {
+          // Token + lastRefreshedAt are new — re-render the current tab so
+          // the chip text and the parsed JWT claims pick up the new token.
+          this.switchTab(this.currentTab);
+        } else {
+          refreshBtn.textContent = 'Refresh failed';
+          setTimeout(() => { refreshBtn.textContent = originalText; refreshBtn.disabled = false; }, 1500);
+        }
+      } catch {
+        refreshBtn.textContent = 'Refresh failed';
+        setTimeout(() => { refreshBtn.textContent = originalText; refreshBtn.disabled = false; }, 1500);
+      }
+    });
+    meta.appendChild(refreshBtn);
+
+    wrap.appendChild(meta);
+    this.startRefreshAgeTicker();
+
     // Always-visible parsed claims block below the chip.
     const claims = document.createElement('div');
     claims.style.cssText = 'margin-top:8px;padding:8px 10px;background:#08090c;border:1px solid #1a1d23;border-radius:4px;font-family:monospace;font-size:11px;line-height:1.6;color:#ccc;';
@@ -1770,6 +1815,26 @@ export class AccountPage {
     wrap.appendChild(claims);
 
     return wrap;
+  }
+
+  /** Format the "Refreshed Xs ago" line. null → "Not refreshed yet" (a
+   *  manually-pasted token has no lastRefreshedAt timestamp).            */
+  private formatRefreshAge(lastRefreshedAt: number | null): string {
+    if (lastRefreshedAt === null) return 'Not refreshed yet (paste-in token)';
+    const now = Math.floor(Date.now() / 1000);
+    const delta = Math.max(0, now - lastRefreshedAt);
+    return `Refreshed ${this.formatDuration(delta)} ago`;
+  }
+
+  /** Re-uses the same per-second interval for every mount of the page —
+   *  only fires while the page is mounted (started on first token row
+   *  build, cleared in destroy). */
+  private startRefreshAgeTicker(): void {
+    if (this.refreshAgeTimer) return;
+    this.refreshAgeTimer = setInterval(() => {
+      if (!this.refreshAgeEl || !document.body.contains(this.refreshAgeEl)) return;
+      this.refreshAgeEl.textContent = this.formatRefreshAge(cloudApi.lastRefreshedAt);
+    }, 1000);
   }
 
   /** Format a positive number of seconds as "1d 3h", "23m", "45s". */
@@ -1823,5 +1888,8 @@ export class AccountPage {
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   }
 
-  destroy(): void { this.container.remove(); }
+  destroy(): void {
+    if (this.refreshAgeTimer) { clearInterval(this.refreshAgeTimer); this.refreshAgeTimer = null; }
+    this.container.remove();
+  }
 }

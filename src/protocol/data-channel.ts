@@ -3,6 +3,7 @@ import type { WebRTCConnection } from '../connection/webrtc';
 import { handleValidation } from './validation';
 import { startHeartbeat, stopHeartbeat } from './heartbeat';
 import { DATA_CHANNEL_TYPE } from './topics';
+import { log } from '../ui/logger';
 
 export class DataChannelHandler {
   private webrtc: WebRTCConnection;
@@ -36,7 +37,7 @@ export class DataChannelHandler {
     if (msg.type === DATA_CHANNEL_TYPE.ERR) {
       const info = (msg as { info?: string }).info;
       if (info === 'Validation Needed.') {
-        console.log('[go2:dc] Re-sending validation (err: Validation Needed)');
+        log.webrtc.info('[go2:dc] Re-sending validation (err: Validation Needed)');
         handleValidation(
           { type: DATA_CHANNEL_TYPE.VALIDATION, topic: '', data: this.lastValidationKey },
           this.webrtc,
